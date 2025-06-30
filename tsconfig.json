@@ -1,0 +1,23 @@
+{
+    "compilerOptions": {
+        "skipLibCheck": true,
+        "module": "ESNext",
+        "moduleResolution": "Node",
+        "allowSyntheticDefaultImports": true,
+        "allowJs": true,
+        "outDir": "build",
+        "baseUrl": ".", // ✅ 添加这一行
+        "paths": {
+            "@/*": [
+                "src/*"
+            ] // ✅ 让 @ 指向 src 目录
+        }
+    },
+    "include": [
+        "src/**/*"
+    ],
+    "exclude": [
+        "node_modules",
+        "build/**/*"
+    ]
+}

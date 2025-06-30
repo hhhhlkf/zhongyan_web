@@ -1,0 +1,436 @@
+$navbarHeight: 60px;
+$tagsHeight: 44px;
+
+.el-popper.is-light{
+    border: 0 solid #fff !important;
+ }
+
+.sidebar-logo-container {
+    text-align: left !important;
+    line-height: 60px !important;
+    height: 60px !important;
+
+    .sidebar-logo {
+        margin: 0 5px !important;
+        width: 40px !important;
+        height: 40px !important;
+    }
+}
+
+
+.navbar {
+    height: $navbarHeight !important;
+
+    .hamburger-container,
+    .app-breadcrumb.el-breadcrumb,
+    .right-menu {
+        line-height: $navbarHeight !important;
+
+        // .el-dropdown {
+        //     margin-top: 5px;
+        // }
+    }
+}
+
+.tags-view-container {
+    height: $tagsHeight !important;
+
+    .tags-view-wrapper {
+        .tags-view-item {
+            margin-top: 8px !important;
+            height: 28px !important;
+            line-height: 28px !important;
+            font-weight: 600;
+
+            .el-icon-close {
+                margin-bottom: 1px;
+            }
+        }
+    }
+
+    .tags-view-item.active {
+        color: var(--el-color-primary) !important;
+        background-color: var(--el-color-primary-light-8) !important;
+
+        &::before {
+            display: none !important;
+        }
+    }
+}
+
+.hasTagsView .app-main {
+    min-height: calc(100vh - $tagsHeight - $navbarHeight) !important;
+}
+
+.router-link-active.router-link-exact-active,
+.el-menu--vertical .el-menu-item.is-active {
+    background-color: var(--el-color-primary) !important;
+}
+
+.el-menu--vertical .el-menu-item.is-active {
+    color: $base-menu-color-active !important;
+    font-weight: 600;
+}
+
+.el-form-item__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: unset !important;
+    text-align: right;
+}
+
+.el-table__inner-wrapper::before {
+    display: none;
+}
+
+.outer-acitve-shadow {
+    animation: shadow-animation 1s infinite;
+    border-radius: 50%;
+    width: 34px;
+    height: 34px;
+    position: absolute;
+    z-index: 1;
+    top: -12px;
+    left: -12px;
+}
+
+@keyframes shadow-animation {
+    0% {
+        box-shadow: 0px 0px 0px 0px rgb(51, 157, 255, 0.5);
+    }
+
+    50% {
+        box-shadow: 0px 0px 10px 5px rgb(51, 157, 255, 1);
+    }
+
+    100% {
+        box-shadow: 0px 0px 0px 0px rgb(51, 157, 255, 0.5);
+    }
+}
+
+#app {
+    color: #fff;
+}
+
+@font-face {
+    font-family: "D-DIN";
+    src: url("../font/D-DIN.ttf");
+}
+
+@font-face {
+    font-family: "PangMen";
+    src: url("../font/PangMen.ttf");
+}
+
+@font-face {
+    font-family: "Quantico";
+    src: url("../font/Quantico-Bold.ttf");
+}
+
+//element菜单栏
+.el-dropdown-menu {
+    max-height: 300px !important;
+    overflow: auto;
+    margin-top: 5px !important;
+
+    .el-checkbox-group {
+        .el-checkbox {
+            display: flex;
+            align-items: center;
+        }
+
+        .el-checkbox__label {
+            display: flex;
+            align-items: center;
+        }
+
+    }
+
+    .el-dropdown-menu__item {
+        display: flex;
+        align-items: center;
+    }
+}
+
+.el-pager li,
+.btn-prev,
+.btn-next {
+    background-color: #fff !important;
+    border: 1px solid #eee !important;
+    margin: 0 3px;
+
+    &.is-active {
+        color: #fff !important;
+        background-color: var(--el-color-primary) !important;
+        border: 1px solid var(--el-color-primary) !important;
+    }
+
+    &:hover {
+        color: var(--el-color-primary-light-2);
+        border: 1px solid var(--el-color-primary-light-2) !important;
+    }
+}
+
+// 下拉框选中高亮样式消除
+.el-form-item__content .search-text .el-input.is-focus .el-input__wrapper,
+.el-form-item__content .search-text .el-input__wrapper.is-focus {
+    box-shadow: unset !important;
+}
+
+// 查询字段名称
+.search-text {
+    font-style: normal;
+    font-weight: 500;
+    font-size: 14px;
+    width: 68px !important;
+    color: #424242;
+    display: inline-block;
+    text-align: right;
+
+    // 如果是下拉选择查询字段名称，则修改样式
+    .el-input__wrapper {
+        padding: 1px 0;
+        box-shadow: unset !important;
+    }
+
+    .el-input__inner {
+        font-size: var(--el-form-label-font-size);
+        color: var(--el-text-color-regular);
+        font-weight: 700;
+        text-align: right;
+    }
+
+    .el-input__suffix-inner>:first-child {
+        margin: 0 8px 0 4px;
+
+    }
+}
+
+// 查看图片按钮问题
+.el-image-viewer__btn {
+    opacity: unset;
+}
+
+// 覆写增改窗体的标题样式
+.el-dialog__header {
+    background-color: var(--el-color-primary);
+    margin-right: 0 !important;
+    padding: 8px 20px !important;
+
+    .el-dialog__headerbtn {
+        top: -4px;
+    }
+
+    .el-dialog__title,
+    .el-dialog__close {
+        color: #fff !important;
+        font-size: 16px;
+    }
+}
+
+//通用-蓝色圆角矩形装饰
+.rectangle {
+    width: 5px;
+    height: 18px;
+    background-color: #3C7BF8;
+    border-radius: 13px;
+    display: inline-block;
+    margin-right: 5px;
+}
+
+//重写v2-table样式
+.el-table-v2__header-wrapper {
+    height: 40px !important;
+
+    .el-table-v2__header {
+        height: 100% !important;
+
+        .el-table-v2__header-row {
+            height: 100% !important;
+            background-color: #E8EDF8;
+
+            .el-table-v2__header-cell {
+                color: #223355;
+                background-color: #E8EDF8;
+            }
+        }
+    }
+}
+
+// 覆写v2虚拟表样式-开始
+
+// 设置自动分配剩余空间的class
+.flex-row-cell {
+    flex: 1 !important;
+}
+
+.el-table-v2__body {
+    color: #223355;
+
+    >div:first-of-type {
+
+        >div:first-of-type {
+            width: 100% !important;
+        }
+    }
+
+    .el-table-v2__row {
+        height: 36px !important;
+        width: 100% !important;
+    }
+
+    .el-table-v2__row-cell {
+        cursor: pointer;
+
+        &.active {
+            background-color: #e6f7ff;
+        }
+    }
+}
+
+.el-table-v2__header-cell,
+.el-table-v2__row-cell {
+    &:first-of-type {
+        padding-left: 16px;
+    }
+}
+
+// 覆写v2虚拟表样式-结束
+
+/* 通过时间延迟解决自动填充密码的样式问题 */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+    transition-delay: 99999s;
+    transition: color 99999s ease-out, background-color 99999s ease-out;
+    -webkit-transition-delay: 99999s;
+    -webkit-transition: color 99999s ease-out, background-color 99999s ease-out;
+    -webkit-text-fill-color: #222;
+}
+
+.overflow-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.el-image-viewer__actions,
+.el-image-viewer__close {
+    opacity: 1 !important;
+}
+
+// 解决el-table暂无数据出现的滚动条问题
+.el-table__empty-block {
+    width: 100% !important;
+}
+
+.app-container {
+    >.el-row {
+        >.el-col {
+            >.el-button {
+                padding: 8px 11px !important;
+            }
+        }
+    }
+}
+
+.leaflet-fade-anim .leaflet-popup {
+
+    // 气泡内边距覆盖
+    .leaflet-popup-content {
+        margin: 10px 12px !important;
+    }
+}
+
+.el-form .el-select {
+    width: 100%
+}
+
+.refresh-btn {
+    margin-left: 8px;
+    cursor: pointer;
+}
+
+.leaflet-container {
+    .map-back {
+        width: 34px;
+        height: 34px;
+        border-radius: 100%;
+        border: 1px solid #11C79B;
+        background-color: #fff;
+        position: relative;
+        left: -12px;
+        top: -12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0px 3.5px 3.5px 0px rgba(0, 0, 0, 0.20);
+    }
+
+    .map-offline {
+        border: 1px solid #fff;
+        background-color: #C3CAD9;
+    }
+
+    .map-cluster {
+        position: relative;
+        height: 28px;
+        width: max-content;
+        display: flex;
+        left: -28px;
+        top: -13px;
+        box-shadow: 0px 3.5px 3.5px 0px rgba(0, 0, 0, 0.20);
+        border-radius: 28px;
+
+        .cluster-img {
+            width: 35px;
+            background-color: #11C79B;
+            border: 1px solid #11C79B;
+            border-radius: 28px 0 0 28px;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding-left: 4px;
+
+        }
+
+        .cluster-count {
+            height: 100%;
+            font-size: 18px;
+            color: #223355;
+            background-color: #fff;
+            border: 1px solid #11C79B;
+            border-radius: 0 28px 28px 0;
+            padding: 0 12px 0 6px;
+        }
+    }
+}
+
+@keyframes circle-corotation {
+    0% {
+        transform: rotate(0deg)
+    }
+
+    100% {
+        transform: rotate(360deg)
+    }
+}
+
+@keyframes circle-reversal {
+    0% {
+        transform: rotate(360deg)
+    }
+
+    100% {
+        transform: rotate(0deg)
+    }
+}
+
+.body-half-top-padding {
+    .el-dialog__body {
+        padding-bottom: 16px;
+    }
+}
