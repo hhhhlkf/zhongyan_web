@@ -9,7 +9,8 @@
 -->
 <template>
     <div class="generalOverview">
-        <el-table class="dataTable" :data="dataList" height="300" size='small'
+        <div class="table-wrap">
+        <el-table class="dataTable" :data="dataList" height="100%" size='small'
             style="--el-table-border-color: none;border-right: 1px #143275 solid;border-left: 1px #143275 solid;border-bottom: 1px #143275 solid;"
             :highlight-current-row="false" header-cell-class-name="headerClass"
             :header-cell-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', borderLeft: '0.5px #154480 solid', borderBottom: '1px #154480 solid' }"
@@ -38,7 +39,7 @@
 
 
         </el-table>
-
+        </div>
 
         <div class="button-container-below">
             <el-button style="color:azure;margin-left: 5px;margin-bottom: 5px;" @click="openDialog('load')">
@@ -332,7 +333,8 @@ function submitUpload() {
 <style lang="scss" scoped>
 .generalOverview {
     display: flex;
-    justify-content: center;
+    justify-content: flex-start;
+    flex-direction: column;
     /* 将按钮水平居中对齐 */
     gap: 10px;
     /* 添加按钮之间的间距 */
@@ -342,13 +344,26 @@ function submitUpload() {
     /* 父 div 的高度 */
     background: url("@/assets/img/bigScreen/highChart/back-h.png") center no-repeat;
     background-size: 100% 100%;
-
+    padding: 35px 0 62px;
+    box-sizing: border-box;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .dataTable {
-    width: 100%;
+    width: calc(100% - 35px);
+    margin: 0 auto;
     cursor: pointer;
     /* 确保表格和下方按钮容器之间有足够的间距 */
+}
+
+.table-wrap {
+    flex: 0 1 auto;
+    height: calc(100% - 40px);
+    min-height: 0;
+    max-height: calc(100% - 30px);
+    overflow: hidden;
+    margin-top: 16px;
 }
 
 .li-name {
@@ -419,8 +434,12 @@ function submitUpload() {
     background: #175d83;
 }
 
-.el-table tbody tr:hover>td {
-    background: #171F34 !important;
+::v-deep(.dataTable .el-table__body tr:hover > td) {
+    background-color: rgba(0, 0, 0, 0.05) !important;
+}
+
+::v-deep(.dataTable .el-table__body tr.warning-row:hover > td) {
+    background-color: #25627f !important;
 }
 
 
@@ -437,6 +456,10 @@ function submitUpload() {
     /* 按钮水平居中对齐 */
     gap: 10px;
     /* 按钮之间的间距 */
+    flex-wrap: wrap;
+    padding: 0 12px;
+    box-sizing: border-box;
+    min-height: 52px;
 }
 
 .upload-row {

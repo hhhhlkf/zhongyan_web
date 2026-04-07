@@ -129,6 +129,13 @@ onUnmounted(() => {
 </script>
 
 <style lang="scss" >
+.mars3d-container {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
 /**cesium 工具按钮栏*/
 .cesium-viewer-toolbar {
     top: auto !important;

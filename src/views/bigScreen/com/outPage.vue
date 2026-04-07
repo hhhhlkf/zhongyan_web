@@ -52,18 +52,20 @@ export default {
 </script>
 <style lang='scss' scoped>
 .title {
-  width: 405px;
-  height: 40px;
+  width: 100%;
+  min-height: 40px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   padding-left: 40px;
+  padding-right: 8px;
   box-sizing: border-box;
   font-size: 20px;
   position: relative;
+  gap: 8px;
 
   .back {
-    width: 405px;
+    width: 100%;
     height: 32px;
     position: absolute;
     left: 0;
@@ -81,6 +83,8 @@ export default {
 
   .butList {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 }
 
@@ -88,5 +92,7 @@ export default {
   height: calc(100% - 40px);
   display: flex;
   position: relative;
+  padding-top: 12px;
+  box-sizing: border-box;
 }
 </style>

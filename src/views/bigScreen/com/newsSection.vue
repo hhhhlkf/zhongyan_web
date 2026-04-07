@@ -9,8 +9,8 @@
 -->
 <template>
     <div class="div-body">
-        <div class="top">
-            <el-carousel height="240px" motion-blur class="custom-carousel" :interval="carouselInterval"
+        <div ref="carouselHost" class="top">
+            <el-carousel :height="carouselHeight" motion-blur class="custom-carousel" :interval="carouselInterval"
                 indicator-position="outside">
                 <el-carousel-item v-for="item in dataList" :key="item">
                     <template v-if="item.url.endsWith('.mp4')">
@@ -28,14 +28,18 @@
 
 <script setup>
 import { getAreaData } from "../../../api/zhongyan/api";
-import { defineExpose } from 'vue';
+import { defineExpose, onBeforeUnmount } from 'vue';
 
 let dataList = reactive([]);
 const defaultInterval = 4000; // 默认轮播时间
 const videoInterval = 30000; // 视频轮播时间
 const carouselInterval = ref(defaultInterval);
+const carouselHost = ref(null);
+const carouselHeight = ref('240px');
 
 onMounted(async () => {
+    updateCarouselHeight();
+    window.addEventListener('resize', updateCarouselHeight);
     getAreaData("overview").then(res => {
         if (res.code === 200) {
             res.data.pointList.forEach(item => {
@@ -45,6 +49,10 @@ onMounted(async () => {
     }).catch(err => {
         console.log(err)
     })
+});
+
+onBeforeUnmount(() => {
+    window.removeEventListener('resize', updateCarouselHeight);
 });
 
 function setVideoInterval() {
@@ -77,6 +85,12 @@ defineExpose({
     areaChange
 });
 
+function updateCarouselHeight() {
+    const width = carouselHost.value?.clientWidth || 0;
+    const nextHeight = width ? Math.max(180, Math.min(300, Math.round(width * 0.56))) : 240;
+    carouselHeight.value = `${nextHeight}px`;
+}
+
 </script>
 <style scoped>
 .newsImg .newsVideo {
@@ -94,8 +108,9 @@ defineExpose({
 
 .top {
     width: 100%;
-    margin-bottom: 20px;
-    transform: translateX(20px);
+    height: 100%;
+    padding: 37px 16px 0;
+    box-sizing: border-box;
 }
 
 .bottom {
@@ -118,15 +133,14 @@ defineExpose({
 
 .div-body {
     width: 100%;
+    height: 100%;
     box-sizing: border-box;
     position: relative;
-
     justify-content: space-around;
     align-items: center;
     background: url("@/assets/img/bigScreen/highChart/back-h.png") center no-repeat;
     background-size: 100% 100%;
-    padding-top: 5%;
-
+    display: flex;
 }
 
 .el-carousel__item h3 {
@@ -147,9 +161,9 @@ defineExpose({
 }
 
 .custom-carousel {
-    width: 90%;
+    width: 100%;
     /* 设置轮播图的宽度为 80%，你可以根据需要调整这个值 */
     /* 往下一点 */
-    margin-top: 20px;
+    height: 100%;
 }
 </style>

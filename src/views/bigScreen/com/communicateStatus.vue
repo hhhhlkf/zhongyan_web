@@ -4,7 +4,7 @@
             <div class="left-side">
                 <div class="table-container">
                     <h2 class="table-title">设备状态</h2>
-                    <el-table :data="deviceStatuses"
+                    <el-table :data="deviceStatuses" height="100%"
                         style="width: 100%;margin-top: 5px;width: 99.97%;--el-table-border-color: none;border-right: 1px #143275 solid;border-left: 1px #143275 solid;border-bottom: 1px #143275 solid;"
                         :highlight-current-row="false" header-cell-class-name="headerClass"
                         :header-cell-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', borderLeft: '0.5px #154480 solid', borderBottom: '1px #154480 solid' }"
@@ -63,7 +63,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import * as echarts from 'echarts';
 import { getDeviceStatus, getLogInfo, getSourceUse, getTransRate, getTransSchedule } from '../../../api/zhongyan/api';
 import { set } from '@vueuse/core';
@@ -90,6 +90,13 @@ let device = ['nx', 'trans', 'llt', 'rgb', 'hsi'];
 let interval = ref(1);
 let nxSource = ref(null);
 let isTrans = ref(true);
+let sourceChart = null;
+let transChart = null;
+let sourceIntervalId = null;
+let deviceTimer = null;
+let logTimer = null;
+let percentageTimer = null;
+let transRateTimer = null;
 
 
 function handleRowClick(index) {
@@ -144,7 +151,6 @@ function resetCurrentClock() {
 }
 
 function drawSourceCircle() {
-    let sourceChart = null;
     sourceChart = echarts.init(nxSource.value);
     const gaugeData = [
         {
@@ -238,7 +244,7 @@ function drawSourceCircle() {
             }
         ]
     };
-    const sourceInterval = setInterval(function () {
+    sourceIntervalId = setInterval(function () {
         sourceChart.resize();
         getSourceUse(false).then(res => {
             if (res.code == 200) {
@@ -268,8 +274,9 @@ function drawSourceCircle() {
                 });
 
                 if (!isClose.value) {
-                    clearInterval(sourceInterval);
+                    clearInterval(sourceIntervalId);
                     sourceChart.clear();
+                    sourceIntervalId = null;
                 }
             }
         }).catch(err => {
@@ -287,7 +294,8 @@ function drawSourceCircle() {
 
 
 onMounted(() => {
-    setInterval(() => {
+    window.addEventListener('resize', handleResize);
+    deviceTimer = setInterval(() => {
         getDeviceStatus(device).then(res => {
             if (res.code == 200) {
                 let devStatus = res.data.status
@@ -301,7 +309,7 @@ onMounted(() => {
         });
     }, 5000);
 
-    setInterval(() => {
+    logTimer = setInterval(() => {
         getLogInfo().then(res => {
             if (res.code == 200) {
                 // console.log(res.data);
@@ -318,7 +326,7 @@ onMounted(() => {
         });
     }, 5000);
 
-    setInterval(() => {
+    percentageTimer = setInterval(() => {
         percentage.value = props.perc * 100;
         // getTransSchedule().then(res => {
         //     if (res.code == 200) {
@@ -329,7 +337,7 @@ onMounted(() => {
         // });
     }, 1000);
 
-    let myChart = echarts.init(transpeed.value);
+    transChart = echarts.init(transpeed.value);
     let option;
     let data = generateData('2023-10-01 12:00:00', '2023-10-01 12:10:00');
     option = {
@@ -364,8 +372,11 @@ onMounted(() => {
         ],
         xAxis: {
             type: 'time',
+            // 限制时间轴最多展示 5 个标识，避免横轴标签过密
+            splitNumber: 5,
             axisLabel: {
                 color: '#FFFFFF', // 设置 x 轴刻度字体颜色为白色
+                hideOverlap: true,
                 // show: false
             },
             // 坐标轴名称
@@ -440,12 +451,13 @@ onMounted(() => {
 
     }
 
-    option && myChart.setOption(option);
+    option && transChart.setOption(option);
 
-    setInterval(() => {
+    transRateTimer = setInterval(() => {
         getTransRate().then(res => {
             if (res.code == 200) {
-                let now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+                // 这里使用本地时间，避免 toISOString() 带来的 UTC 时区偏移
+                let now = formatDate(new Date());
                 // 让时间短一点，方便观察
 
                 // console.log(now, res.data)
@@ -454,7 +466,7 @@ onMounted(() => {
                     timeStamp.shift();
                 }
                 if (option) {
-                    myChart.setOption(option);
+                    transChart.setOption(option);
                 }
             }
         }).catch(err => {
@@ -462,6 +474,22 @@ onMounted(() => {
         });
     }, 2000)
 });
+
+onBeforeUnmount(() => {
+    window.removeEventListener('resize', handleResize);
+    clearInterval(deviceTimer);
+    clearInterval(logTimer);
+    clearInterval(percentageTimer);
+    clearInterval(transRateTimer);
+    clearInterval(sourceIntervalId);
+    sourceChart && sourceChart.dispose();
+    transChart && transChart.dispose();
+});
+
+function handleResize() {
+    sourceChart && sourceChart.resize();
+    transChart && transChart.resize();
+}
 
 let logs = reactive([
 ]);
@@ -522,7 +550,7 @@ function generateData(startTime, endTime) {
 
     for (let time = start; time <= end; time += oneSecond) {
         let now = new Date(time);
-        let timeStr = now.toISOString().slice(0, 19).replace('T', ' '); // 格式化时间到秒
+        let timeStr = formatDate(now); // 格式化时间到秒
         valueBase = Math.round((Math.random() - 0.5) * 20 + valueBase);
         valueBase <= 0 && (valueBase = Math.random() * 300);
         data.push([timeStr, Math.round(valueBase)]); // 传输速率为整数
@@ -535,20 +563,25 @@ function generateData(startTime, endTime) {
 
 <style scoped>
 .container {
-
     width: 100%;
     background: url("@/assets/img/bigScreen/highChart/back-h.png") center no-repeat;
     background-size: 100% 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 .above-container {
     display: flex;
     height: 75%;
+    min-height: 0;
 }
 
 .below-container {
     display: flex;
     height: 25%;
+    min-height: 140px;
 }
 
 .below-container-nxsource {
@@ -564,10 +597,9 @@ function generateData(startTime, endTime) {
 .right-side {
     flex: 1;
     flex-basis: 50%;
-    /* 确保左右两边各占一半 */
-
     padding: 10px;
-    /* 可选：添加内边距 */
+    min-width: 0;
+    min-height: 0;
 }
 
 .divider {
@@ -581,12 +613,10 @@ function generateData(startTime, endTime) {
 
 .table-container {
     display: flex;
-    justify-content: center;
-    align-items: center;
     height: 100%;
-    /* 确保容器占满左侧容器的高度 */
     flex-direction: column;
-    /* 确保标题和表格垂直排列 */
+    align-items: stretch;
+    min-height: 0;
 }
 
 .li-name {
@@ -662,13 +692,10 @@ function generateData(startTime, endTime) {
     margin-top: 20px;
     width: 100%;
     max-width: 100%;
-    max-height: 300px;
-    /* 设置日志框的最大高度 */
     overflow: hidden;
     flex: 1;
-    /* 使log-card与el-table高度一致 */
+    min-height: 0;
     overflow-y: auto;
-    /* 使内容垂直滚动 */
 }
 
 .log-entry {
@@ -687,10 +714,15 @@ function generateData(startTime, endTime) {
 }
 
 ::v-deep .el-dialog__body {
-    height: 400px;
+    height: min(60vh, 400px);
 }
 
 .sourceDialog {
     z-index: 0;
+}
+
+.left-side :deep(.el-table) {
+    flex: 1;
+    min-height: 0;
 }
 </style>
