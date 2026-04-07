@@ -1,424 +1,61 @@
 <template>
     <div class="processCtrlBlock" v-if="props.processCtrlData == 1">
-        <div class="button-container-above">
-            <!-- <el-button style="color:azure;margin-left: 10px;margin-bottom: 5px;" @click="openDialog('tr')"
-                :disabled="isdisabledBtn.tr">
-                采集压缩
-            </el-button> -->
-            <el-button style="color:azure;margin-left: 10px;margin-bottom: 5px;"
-                @click="processStore.setRgbDrawer(true)">
-                可见光模态
-            </el-button>
-            <el-button style="color:azure;margin-left: 10px;margin-bottom: 5px;"
-                @click="processStore.setLltDrawer(true)">
-                微光红外模态
-            </el-button>
-            <el-button style="color:azure;margin-left: 10px;margin-bottom: 5px;"
-                @click="processStore.setHsiDrawer(true)">
-                高光谱模态
-            </el-button>
-            <!-- <el-button style="color:azure;margin-left: 10px;margin-bottom: 5px;" @click="openDialog('cp')"
-                :disabled="isdisabledBtn.cp">
-                处理开始
-            </el-button> -->
-            <!-- <el-button style="color:azure;margin-left: 10px;margin-bottom: 5px;" @click="changeMessage">
-                {{ btnMessage }}
-            </el-button> -->
+        <el-dialog title="确认操作" v-model="dialogVisible.tr" width="30%" @close="closeDialog('tr')">
+            <span>是否需要开启边缘设备的实时采集和压缩？</span>
+            <template #footer>
+                <span class="dialog-footer">
+                    <el-button @click="dialogVisible.tr = false">取消</el-button>
+                    <el-button @click="confirmDialog('tr')">确认</el-button>
+                </span>
+            </template>
+        </el-dialog>
 
-            <el-dialog title="确认操作" v-model="dialogVisible.tr" width="30%" @close="closeDialog('tr')">
-                <span>是否需要开启边缘设备的实时采集和压缩？</span>
-                <template #footer>
-                    <span class="dialog-footer">
-                        <el-button @click="dialogVisible.tr = false">取消</el-button>
-                        <el-button @click="confirmDialog('tr')">确认</el-button>
-                    </span>
-                </template>
-            </el-dialog>
-            <!-- RGB流程控制 -->
-            <el-drawer v-model="processStore.drawer.rgb" title="RGB数据拍摄处理" :direction="direction" size="30%">
-                <div class="dataModule">
-                    <div class="module camera-control">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z">
-                            </path>
-                        </svg>
-                        <span>相机控制</span>
-                    </div>
+        <el-dialog title="流程控制确认" v-model="controlConfirmDialog.visible" width="30%"
+            @close="closeControlConfirmDialog">
+            <span>{{ controlConfirmDialog.message }}</span>
+            <template #footer>
+                <span class="dialog-footer">
+                    <el-button @click="closeControlConfirmDialog">取消</el-button>
+                    <el-button type="primary" @click="confirmControlAction">确认</el-button>
+                </span>
+            </template>
+        </el-dialog>
 
-                    <div class="custom-control">
-                        <!-- 按钮组 -->
-                        <!-- <div class="button-group">
-                            <el-button type="primary"
-                                style="background-color: #04052C; color: #ffffff;">采集开始</el-button>
-                            <el-button type="danger" style="background-color: #04052C; color: #ffffff;">采集关闭</el-button>
-                        </div> -->
-                        <div class="switch-container">
-                            <!-- 开关 -->
-                            <el-switch v-model="isCollecting['rgb']" active-text="采集开始" inactive-text="采集关闭"
-                                active-color="#409EFF" inactive-color="#C0CCDA" @change="getCaptureData('rgb')" />
+        <div class="processCtrlContent" :class="{ 'processCtrlContent--expanded': workbenchVisible }">
+            <div v-if="workbenchVisible" class="processWorkbenchWrapper">
+                <ProcessWorkbench :visible="workbenchVisible" :modal-type="currentModalType"
+                    :modal-options="modalOptions"
+                    :modal-config="currentModalConfig" :collect-list="currentCollectList"
+                    :process-list="currentProcessList" :history-list="currentHistoryList"
+                    :collect-pagination="currentCollectPagination" :process-pagination="currentProcessPagination" :history-pagination="currentHistoryPagination"
+                    :is-collecting="isCollecting[currentModalType]" :is-interpretate="isInterpretate[currentModalType]" :running="currentWorkbenchRunning"
+                    :workbench-status="currentWorkbenchStatus" :camera-speed="cameraSpeed[currentModalType]"
+                    :table-height="workbenchTableHeight" :row-class-name="getRowClassName"
+                    @close="closeWorkbench" @capture-toggle-request="openControlConfirmDialog"
+                    @process-toggle-request="openProcessConfirmDialog"
+                    @modal-change="handleModalChange"
+                    @transfer="dataTransfer" @recent-page-change="handleRecentPageChange"
+                    @history-page-change="handleHistoryPageChange"
+                    @update:camera-speed="(value) => updateCameraSpeed(currentModalType, value)" />
+            </div>
 
-                            <!-- 数据转移按钮 -->
-                            <el-button type="primary" style="color:azure;margin-left: 10px;margin-top: 3px;"
-                                @click="dataTransfer()">
-                                数据转移
-                            </el-button>
-                        </div>
+            <el-table v-else class="dataTable" :data="graphicQueue" height="350" size='small'
+                style="--el-table-border-color: none;border-right: 1px #143275 solid;border-left: 1px #143275 solid;border-bottom: 1px #143275 solid;"
+                :highlight-current-row="false" header-cell-class-name="headerClass"
+                :header-cell-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', borderLeft: '0.5px #154480 solid', borderBottom: '1px #154480 solid' }"
+                :cell-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', borderBottom: '0.5px #143275 solid', borderLeft: '0.5px #143275 solid' }"
+                :row-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', }" :row-class-name="tableRowClassName">
+                <el-table-column prop="name" label="文件名称" width="160" />
+                <el-table-column prop="type" label="接收时间" width="160" />
+                <el-table-column label="是否展示" width="80">
+                    <template v-slot="scope">
+                        <el-checkbox v-model="scope.row.graphic"></el-checkbox>
+                    </template>
+                </el-table-column>
 
-                        <!-- 滑动条 -->
-                        <div class="slider-container">
-                            <span style="color: #ffffff;">速度控制</span>
-                            <el-slider v-model="cameraSpeed['rgb']" :min="0" :max="10" style="width: 100%;"></el-slider>
-                        </div>
-                    </div>
-                    <div class="module data-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>采集数据列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('rgb', 'collect')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table" height="250">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-                    </div>
-                    <div class="module interpretation-control">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z">
-                            </path>
-                        </svg>
-                        <span>解译控制</span>
-                    </div>
-                    <div class="process-control">
-                        <el-switch v-model="isInterpretate['rgb']" active-text="解译开始" inactive-text="解译关闭"
-                            active-color="#409EFF" inactive-color="#C0CCDA" @change="getProcessData('rgb')" />
-                        <el-button type="primary" style="color:azure;margin:5px 10px;"
-                            @click="dataTransfer('rgb', 'process')">
-                            数据转移
-                        </el-button>
-                    </div>
-                    <div class="module result-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>解译结果列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('rgb', 'process')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table" height="250">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-
-                    </div>
-
-                    <div class="module result-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>历史结果列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('rgb', 'history')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table" height="250">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-                    </div>
-                    <!-- <el-table-v2 class="custom-table" :columns="columns" :data="RGBData" :row-class="getRowClassName"
-                        :width="tableWidth" :height="400" border stripe /> -->
-                </div>
-            </el-drawer>
-            <!-- 微光红外流程控制 -->
-            <el-drawer v-model="processStore.drawer.llt" title="LLT数据拍摄处理" :direction="direction" size="30%">
-                <div class="dataModule">
-                    <div class="module camera-control">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z">
-                            </path>
-                        </svg>
-                        <span>相机控制</span>
-                    </div>
-
-                    <div class="custom-control">
-                        <!-- 按钮组 -->
-                        <!-- <div class="button-group">
-                            <el-button type="primary"
-                                style="background-color: #04052C; color: #ffffff;">采集开始</el-button>
-                            <el-button type="danger" style="background-color: #04052C; color: #ffffff;">采集关闭</el-button>
-                        </div> -->
-                        <div class="switch-container">
-                            <!-- 开关 -->
-                            <el-switch v-model="isCollecting['llt']" active-text="采集开始" inactive-text="采集关闭"
-                                active-color="#409EFF" inactive-color="#C0CCDA" @change="getCaptureData('llt')" />
-
-                            <!-- 数据转移按钮 -->
-                            <el-button type="primary" style="color:azure;margin-left: 10px;margin-top: 3px;"
-                                @click="dataTransfer()">
-                                数据转移
-                            </el-button>
-                        </div>
-
-                        <!-- 滑动条 -->
-                        <div class="slider-container">
-                            <span style="color: #ffffff;">速度控制</span>
-                            <el-slider v-model="cameraSpeed['llt']" :min="0" :max="5" style="width: 100%;"></el-slider>
-                        </div>
-                    </div>
-                    <div class="module data-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>采集数据列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('llt', 'collect')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-                    </div>
-                    <div class="module interpretation-control">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z">
-                            </path>
-                        </svg>
-                        <span>解译控制</span>
-                    </div>
-                    <div class="process-control">
-                        <el-switch v-model="isInterpretate['llt']" active-text="解译开始" inactive-text="解译关闭"
-                            active-color="#409EFF" inactive-color="#C0CCDA" @change="getProcessData('llt')" />
-                        <el-button type="primary" style="color:azure;margin:5px 10px;"
-                            @click="dataTransfer('llt', 'process')">
-                            数据转移
-                        </el-button>
-                    </div>
-                    <div class="module result-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>解译结果列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('llt', 'process')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-
-                    </div>
-
-                    <div class="module result-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>历史结果列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('llt', 'history')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table" height="250">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-                    </div>
-                    <!-- <el-table-v2 class="custom-table" :columns="columns" :data="RGBData" :row-class="getRowClassName"
-                        :width="tableWidth" :height="400" border stripe /> -->
-                </div>
-            </el-drawer>
-            <!-- 高光谱流程控制 -->
-            <el-drawer v-model="processStore.drawer.hsi" title="HSI数据拍摄处理" :direction="direction" size="30%">
-                <div class="dataModule">
-                    <div class="module camera-control">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z">
-                            </path>
-                        </svg>
-                        <span>相机控制</span>
-                    </div>
-
-                    <div class="custom-control">
-                        <!-- 按钮组 -->
-                        <!-- <div class="button-group">
-                            <el-button type="primary"
-                                style="background-color: #04052C; color: #ffffff;">采集开始</el-button>
-                            <el-button type="danger" style="background-color: #04052C; color: #ffffff;">采集关闭</el-button>
-                        </div> -->
-                        <div class="switch-container">
-                            <!-- 开关 -->
-                            <el-switch v-model="isCollecting['hsi']" active-text="采集开始" inactive-text="采集关闭"
-                                active-color="#409EFF" inactive-color="#C0CCDA" @change="getCaptureData('hsi')" />
-
-                            <!-- 数据转移按钮 -->
-                            <el-button type="primary" style="color:azure;margin-left: 10px;margin-top: 3px;"
-                                @click="dataTransfer('hsi', 'collect')">
-                                数据转移
-                            </el-button>
-                        </div>
-
-                        <!-- 滑动条 -->
-                        <div class="slider-container">
-                            <span style="color: #ffffff;">速度控制</span>
-                            <el-slider v-model="cameraSpeed['hsi']" :min="50" :max="100"
-                                style="width: 100%;"></el-slider>
-                        </div>
-                    </div>
-                    <div class="module data-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>采集数据列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('hsi', 'collect')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table" height="250">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-                    </div>
-                    <div class="module interpretation-control">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z">
-                            </path>
-                        </svg>
-                        <span>解译控制</span>
-                    </div>
-                    <div class="process-control">
-                        <el-switch v-model="isInterpretate['hsi']" active-text="解译开始" inactive-text="解译关闭"
-                            active-color="#409EFF" inactive-color="#C0CCDA" @change="getProcessData('hsi')" />
-                        <el-button type="primary" style="color:azure;margin:5px 10px;"
-                            @click="dataTransfer('hsi', 'process')">
-                            数据转移
-                        </el-button>
-                    </div>
-                    <div class="module result-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>解译结果列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('hsi', 'process')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table" height="250">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-
-                    </div>
-
-                    <div class="module result-list">
-                        <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor"
-                                d="M3 3h18v2H3V3zm0 4h18v2H3V7zm0 4h18v2H3v-2zm0 4h18v2H3v-2zm0 4h18v2H3v-2z">
-                            </path>
-                        </svg>
-                        <span>历史结果列表</span>
-                    </div>
-                    <div class="virtual-table">
-                        <el-table :data="processStore.getList('hsi', 'history')" style="width: 100%;" stripe border
-                            :row-class-name="getRowClassName" class="custom-table" height="250">
-                            <el-table-column prop="id" label="序号" class-name="col-10"></el-table-column>
-                            <el-table-column prop="name" label="名称" class-name="col-40"></el-table-column>
-                            <el-table-column prop="time" label="时间" class-name="col-40"></el-table-column>
-                            <el-table-column label="展示" class-name="col-20">
-                                <template #default="scope">
-                                    <el-checkbox v-model="scope.row.graphic" />
-                                </template>
-                            </el-table-column>
-                        </el-table>
-                    </div>
-                    <!-- <el-table-v2 class="custom-table" :columns="columns" :data="RGBData" :row-class="getRowClassName"
-                        :width="tableWidth" :height="400" border stripe /> -->
-                </div>
-            </el-drawer>
+            </el-table>
         </div>
-        <el-table class="dataTable" :data="graphicQueue" height="250" size='small'
-            style="--el-table-border-color: none;border-right: 1px #143275 solid;border-left: 1px #143275 solid;border-bottom: 1px #143275 solid;"
-            :highlight-current-row="false" header-cell-class-name="headerClass"
-            :header-cell-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', borderLeft: '0.5px #154480 solid', borderBottom: '1px #154480 solid' }"
-            :cell-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', borderBottom: '0.5px #143275 solid', borderLeft: '0.5px #143275 solid' }"
-            :row-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', }" :row-class-name="tableRowClassName">
-            <el-table-column prop="name" label="文件名称" width="160" />
-            <el-table-column prop="type" label="接收时间" width="160" />
-            <el-table-column label="是否展示" width="80">
-                <!-- <el-checkbox v-model="selected"></el-checkbox> -->
-                <template v-slot="scope">
-                    <el-checkbox v-model="scope.row.graphic"></el-checkbox>
-                </template>
-            </el-table-column>
-
-        </el-table>
-        <div class="button-container-below">
+        <div v-if="!workbenchVisible" class="button-container-below">
             <el-button style="color:azure;margin-left: 10px;margin-bottom: 5px;" @click="openDialog('cp')"
                 :disabled="isdisabledBtn.cp">
                 处理开始
@@ -518,12 +155,13 @@
 
 
 <script setup>
-import { ref, onMounted, reactive, toRaw } from 'vue'
+import { computed, ref, onMounted, reactive, toRefs } from 'vue'
 import { getProcess2Result, process2List, startControl } from '../../../api/zhongyan/api';
 import { getRecentData, cameraControl, selectMethod, getHistoryList, transferData } from '@/api/zhongyan/dataManager';
-import { ElMessage, ElDrawer } from 'element-plus';
-import { update } from 'mars3d';
+import { ElMessage } from 'element-plus';
 import { useProcessStore } from "../../../store/modules/process";
+import { modalConfigs, modalList } from './processControl/modalConfig';
+import ProcessWorkbench from './processControl/ProcessWorkbench.vue';
 
 
 // onMounted(() => {
@@ -563,7 +201,6 @@ import { useProcessStore } from "../../../store/modules/process";
 // 采集处理传输控制变量
 
 let processStore = useProcessStore()
-let direction = ref('ltr')
 
 
 // 获取表格行的样式，使得表格呈现斑马纹效果
@@ -573,6 +210,14 @@ const getRowClassName = ({ row, rowIndex }) => {
 
 // 多模态数据定义
 const modalities = ['rgb', 'llt', 'hsi'];
+const currentModalType = ref('rgb');
+const modalOptions = modalList;
+const listPageSizeMap = {
+    collect: 10,
+    process: 10,
+    history: 5,
+};
+const workbenchTableHeight = 250;
 
 
 let cameraSpeed = reactive({});// 相机速度
@@ -580,11 +225,136 @@ let isCollecting = reactive({});// 是否正在采集
 let isInterpretate = reactive({});// 是否正在解译
 let captureIntervalIds = reactive({}); // 用于存储每个模态的定时器 ID
 let processIntervalIds = reactive({}); // 用于存储每个模态的处理定时器 ID
+const paginationState = reactive({});
+const workbenchVisible = ref(false);
+const controlConfirmDialog = reactive({
+    visible: false,
+    modal: 'rgb',
+    type: 'capture',
+    nextState: false,
+    message: '',
+});
 
 modalities.forEach(modality => {
-    cameraSpeed[modality] = 0;
+    cameraSpeed[modality] = modalConfigs[modality]?.speedMin ?? 0;
     isCollecting[modality] = false;
     isInterpretate[modality] = false;
+    paginationState[modality] = {
+        collect: 1,
+        process: 1,
+        history: 1,
+    };
+});
+
+function toggleWorkbenchVisible() {
+    setWorkbenchVisible(!workbenchVisible.value);
+}
+
+function closeWorkbench() {
+    setWorkbenchVisible(false);
+}
+
+function openWorkbench() {
+    setWorkbenchVisible(true);
+}
+
+// Key change: keep a single source of truth for workbench visibility and sync it to the parent.
+function setWorkbenchVisible(visible) {
+    workbenchVisible.value = visible;
+    emit('workbench-visible-change', visible);
+}
+
+defineExpose({
+    openWorkbench,
+})
+
+function updateCameraSpeed(modal, value) {
+    cameraSpeed[modal] = value;
+}
+
+// 关键修改：bench 内切换模态时，所有展示与控制都跟随当前模态联动。
+function handleModalChange(modal) {
+    if (!modalConfigs[modal]) {
+        return;
+    }
+    currentModalType.value = modal;
+}
+
+function normalizePage(modal, listType, total) {
+    const pageSize = listPageSizeMap[listType];
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const currentPage = Math.min(Math.max(paginationState[modal][listType], 1), totalPages);
+    paginationState[modal][listType] = currentPage;
+    return currentPage;
+}
+
+function buildPagination(modal, listType) {
+    if (listType === 'history') {
+        return processStore.getHistoryPagination(modal);
+    }
+
+    const list = processStore.getList(modal, listType);
+    const total = list.length;
+    const pageSize = listPageSizeMap[listType];
+    const page = normalizePage(modal, listType, total);
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+
+    return {
+        page,
+        pageSize,
+        total,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrevious: page > 1,
+        snapshotTime: null,
+    };
+}
+
+function buildPagedList(modal, listType) {
+    if (listType === 'history') {
+        return processStore.getList(modal, 'history');
+    }
+
+    const list = processStore.getList(modal, listType);
+    const pageSize = listPageSizeMap[listType];
+    const page = normalizePage(modal, listType, list.length);
+    const start = (page - 1) * pageSize;
+
+    return list.slice(start, start + pageSize);
+}
+
+function handleRecentPageChange(modal, listType, page) {
+    paginationState[modal][listType] = page;
+}
+
+function handleHistoryPageChange(modal, page) {
+    paginationState[modal].history = page;
+    getModalHistoryList(modal, page);
+}
+
+const currentModalConfig = computed(() => modalConfigs[currentModalType.value]);
+const currentCollectList = computed(() => buildPagedList(currentModalType.value, 'collect'));
+const currentProcessList = computed(() => buildPagedList(currentModalType.value, 'process'));
+const currentHistoryList = computed(() => buildPagedList(currentModalType.value, 'history'));
+const currentCollectPagination = computed(() => buildPagination(currentModalType.value, 'collect'));
+const currentProcessPagination = computed(() => buildPagination(currentModalType.value, 'process'));
+const currentHistoryPagination = computed(() => buildPagination(currentModalType.value, 'history'));
+const currentWorkbenchRunning = computed(() => isCollecting[currentModalType.value] || isInterpretate[currentModalType.value]);
+const currentWorkbenchStatus = computed(() => {
+    const collecting = isCollecting[currentModalType.value];
+    const interpretating = isInterpretate[currentModalType.value];
+
+    if (collecting && interpretating) {
+        return '采集与解译中';
+    }
+    if (collecting) {
+        return '采集中';
+    }
+    if (interpretating) {
+        return '解译中';
+    }
+
+    return '待命';
 });
 
 // function getData(modal){
@@ -606,8 +376,8 @@ modalities.forEach(modality => {
  * @return {*}
  * 
  */
-function getCaptureData(modal) {
-    const isCol = isCollecting[modal];
+function getCaptureData(modal, targetState = isCollecting[modal]) {
+    const isCol = targetState;
     console.log("modal:", modal);
     const camSpeed = cameraSpeed[modal];
     // 检查是否开启采集
@@ -628,12 +398,16 @@ function getCaptureData(modal) {
                 });
                 return;
             }
+            isCollecting[modal] = true;
             ElMessage({
                 message: `${modal}相机开启成功`,
                 type: 'success'
             });
             processStore.setFlyToFlag(true)
             // 启动定时器并保存定时器 ID
+            if (captureIntervalIds[modal]) {
+                clearInterval(captureIntervalIds[modal]);
+            }
             captureIntervalIds[modal] = setInterval(async () => {
                 try {
                     const response = await getRecentData(modal,'collect');
@@ -658,6 +432,7 @@ function getCaptureData(modal) {
         //     type: 'info'
         // });
         cameraControl(modal, isCol).then(res => {
+            isCollecting[modal] = false;
             ElMessage({
                 message: "相机关闭成功",
                 type: 'success'
@@ -669,6 +444,7 @@ function getCaptureData(modal) {
                 console.log(`定时器已关闭 (${modal})`);
             }
         }).catch(err => {
+            isCollecting[modal] = true;
             ElMessage({
                 message: err.message || "相机关闭失败",
                 type: 'error'
@@ -682,8 +458,8 @@ function getCaptureData(modal) {
  * @param {*} modal
  * @return {*}
  */
-function getProcessData(modal) {
-    const isInter = isInterpretate[modal];
+function getProcessData(modal, targetState = isInterpretate[modal]) {
+    const isInter = targetState;
     // 检查是否开启解译
     if (isInter) {
         processStore.watchList(modal, 'process', (newVal) => {
@@ -694,11 +470,15 @@ function getProcessData(modal) {
             type: 'info'
         });
         selectMethod(modal, isInter).then(res => {
+            isInterpretate[modal] = true;
             ElMessage({
                 message: `${modal}解译开启成功`,
                 type: 'success'
             });
             // 启动定时器并保存定时器 ID
+            if (processIntervalIds[modal]) {
+                clearInterval(processIntervalIds[modal]);
+            }
             processIntervalIds[modal] = setInterval(async () => {
                 try {
                     const response = await getRecentData(modal, 'process');
@@ -721,6 +501,7 @@ function getProcessData(modal) {
             type: 'info'
         });
         selectMethod(modal, isInter).then(res => {
+            isInterpretate[modal] = false;
             ElMessage({
                 message: "解译关闭成功",
                 type: 'success'
@@ -732,6 +513,7 @@ function getProcessData(modal) {
                 console.log(`定时器已关闭 (${modal})`);
             }
         }).catch(err => {
+            isInterpretate[modal] = true;
             ElMessage({
                 message: err.message || "解译关闭失败",
                 type: 'error'
@@ -740,17 +522,49 @@ function getProcessData(modal) {
     }
 }
 
+function openControlConfirmDialog(modal, nextState) {
+    controlConfirmDialog.visible = true;
+    controlConfirmDialog.modal = modal;
+    controlConfirmDialog.type = 'capture';
+    controlConfirmDialog.nextState = nextState;
+    controlConfirmDialog.message = nextState ? '是否确认开始采集？' : '是否确认关闭采集？';
+}
+
+function openProcessConfirmDialog(modal, nextState) {
+    controlConfirmDialog.visible = true;
+    controlConfirmDialog.modal = modal;
+    controlConfirmDialog.type = 'process';
+    controlConfirmDialog.nextState = nextState;
+    controlConfirmDialog.message = nextState ? '是否确认开始解译？' : '是否确认关闭解译？';
+}
+
+function closeControlConfirmDialog() {
+    controlConfirmDialog.visible = false;
+}
+
+function confirmControlAction() {
+    const { modal, type, nextState } = controlConfirmDialog;
+    closeControlConfirmDialog();
+
+    if (type === 'capture') {
+        getCaptureData(modal, nextState);
+        return;
+    }
+
+    getProcessData(modal, nextState);
+}
+
 /**
  * @description: 获取历史数据列表
  * @param {*} modal
  * @return {*}
  */
-function getModalHistoryList(modal) {
-    getHistoryList(modal).then(res => {
+function getModalHistoryList(modal, page = 1) {
+    getHistoryList(modal, page).then(res => {
         console.log(`获取${modal}历史数据:`, res);
-        // 将历史数据添加到对应模态的列表中
-        processStore.clearList(modal, 'history'); // 清空历史列表
-        processStore.addItemsToList(modal, 'history', res.data.fileList);
+        const pageData = res.data || {};
+        paginationState[modal].history = pageData.page || page;
+        processStore.setHistoryPageData(modal, pageData);
     }).catch(err => {
         console.error(`获取${modal}历史数据失败:`, err);
     });
@@ -765,7 +579,7 @@ onMounted(() => {
         processStore.watchList(modal, 'history', (newVal) => {
             console.log(`${modal}历史数据:`, newVal);
         });
-        getModalHistoryList(modal);
+        getModalHistoryList(modal, 1);
     });
 });
 
@@ -789,7 +603,7 @@ function dataTransfer(modal = 'rgb', task = 'collect') {
         });
         // processStore.addItemsToList(modal, 'history', processStore.getList(modal, task));
 
-        getModalHistoryList(modal); // 刷新历史数据列表
+        getModalHistoryList(modal, 1); // 刷新历史数据列表并回到第一页
         processStore.clearList(modal, task); // 清空采集列表
     }).catch(err => {
         console.error(`数据转移失败 (${modal}, ${task}):`, err);
@@ -814,7 +628,7 @@ let isdisabledBtn = reactive({
 })
 let btnMessage = ref('进行旋转')
 let props = defineProps(['bindMourseClick', 'processCtrlData', 'changeRotate', 'graphicQueue', 'updateProcess', 'updateTrans', 'updateEvaluate', 'showgraphic', 'toggleIsVisible', 'areaLabel', 'getProcessResult'])
-const emit = defineEmits(['update:graphicQueue'])
+const emit = defineEmits(['update:graphicQueue', 'workbench-visible-change'])
 const { graphicQueue } = toRefs(props)
 let uploadProgress = ref(0)
 let filePath = ref('D:/')
@@ -1028,8 +842,30 @@ function submitUpload() {
     /* 父 div 的宽度 */
     height: 100%;
     /* 父 div 的高度 */
-    background: url("@/assets/img/bigScreen/highChart/back-h.png") center no-repeat;
-    background-size: 100% 100%;
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(6, 19, 48, 0.62) 0%, rgba(10, 27, 62, 0.42) 100%);
+    position: relative;
+    overflow: hidden;
+}
+
+.processCtrlContent {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 56px 0 72px;
+}
+
+.processCtrlContent--expanded {
+    padding: 8px 0 0;
+}
+
+.processWorkbenchWrapper {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
 }
 
 .button-container-below {
@@ -1063,7 +899,9 @@ function submitUpload() {
 
 .dataTable {
     width: 100%;
-    margin-top: 40px;
+    margin-top: -20px;
+    margin-left: 10px;
+    transform: translateY(-8px);
     cursor: pointer;
     /* 确保表格和下方按钮容器之间有足够的间距 */
 }

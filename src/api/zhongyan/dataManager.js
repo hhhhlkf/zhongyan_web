@@ -18,13 +18,15 @@ import request from '@/utils/request'
  * @param {*} task
  * @return {*}
  */
-export function getRecentData(type = 'rgb', task = 'collect') {
+export function getRecentData(type = 'rgb', task = 'collect', page = 1, snapshotTime) {
     return request({
         url: '/v2/data/recent',
         method: 'get',
         params: {
             type: type,
-            task: task
+            task: task,
+            page: page,
+            snapshotTime: snapshotTime
         }
     })
 }
@@ -68,14 +70,16 @@ export function selectMethod(type = 'rgb', status = true) {
 /**
  * @description: 获取历史数据列表
  * @param {*} type
+ * @param {*} page
  * @return {*}
  */
-export function getHistoryList(type = 'rgb') {
+export function getHistoryList(type = 'rgb', page = 1) {
     return request({
         url: '/v2/data/history',
         method: 'get',
         params: {
-            type: type
+            type: type,
+            page: page
         }
     })
 }

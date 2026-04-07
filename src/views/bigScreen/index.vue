@@ -10,7 +10,13 @@
 <template>
 
     <div class="big-page">
+        <div class="bg"></div>
+        <div class="big-screen-stage" :style="stageStyle">
+            <div class="big-screen-shell">
         <!-- <div class="page-btn screen-detail" @click="goToBigScreen()">综合评估</div> -->
+        <div v-if="!workbenchExpanded" class="page-btn screen-workbench-toggle" @click="openWorkbenchPanel()">
+            显示流程控制
+        </div>
         <div class="page-btn screen-detail" @click="changetime()">{{ timeMode }}</div>
         <div class="bg"></div>
         <pageTitle></pageTitle>
@@ -137,9 +143,9 @@
             </div>
         </div>
 
-        <div class="detail-page left">
+        <div class="detail-page left" :class="{ 'workbench-expanded': workbenchExpanded }">
 
-            <outPage class="center" title="流程控制板块">
+            <outPage class="center workbench-stage" title="流程控制板块">
                 <template #butList>
                     <!-- <div class="btn" :class="{ active: informationServiceAcitve == '1' }" @click="toggleTo(1, false)">
                         边缘处理
@@ -160,14 +166,15 @@
                 <template #content>
                     <!-- <informationService :active="informationServiceAcitve" @openInfo="openInformationServiceInfo">
                     </informationService> -->
-                    <processControlView :processCtrlData="informationServiceAcitve" :changeRotate="changeRotate"
+                    <processControlView ref="processControlPanel" :processCtrlData="informationServiceAcitve" :changeRotate="changeRotate"
                         :graphicQueue="graphicQueue" :updateProcess="updateProcess" :updateEvaluate="updateEvaluate"
                         :showgraphic="showgraphic" :toggleIsVisible="toggleIsVisible" :areaLabel="areaLabel"
-                        :getProcessResult="getProcessResult" :bindMourseClick="bindMourseClick">
+                        :getProcessResult="getProcessResult" :bindMourseClick="bindMourseClick"
+                        @workbench-visible-change="handleWorkbenchVisibleChange">
                     </processControlView>
                 </template>
             </outPage>
-            <outPage class="top body-overflow" title="应急数据与结果管理">
+            <outPage v-show="!workbenchExpanded" class="top body-overflow" title="应急数据与结果管理">
                 <template #content>
                     <generalOverview :showgraphic="showgraphic" :showDisaster="showDisaster"
                         :closeDisaster="closeDisaster" :generView="generView"></generalOverview>
@@ -186,6 +193,8 @@
             <img src="../../assets/img/bigScreen/legend/multiplierSpeed.png" alt="">
         </div>
 
+            </div>
+        </div>
     </div>
 </template>
 <script setup>
@@ -209,7 +218,7 @@ import processControlView from "./com/processControlView.vue";
 import communicateStatus from "./com/communicateStatus.vue";
 
 
-import { reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { add, random } from "xe-utils";
 import { ElMessage } from "element-plus";
 import { getAreaAxis, getPointData, processResult, getServerIp } from "../../api/zhongyan/api";
@@ -219,6 +228,7 @@ const configUrl = "config/config.json";
 let value_edge = ref('案例选择')
 // let value_line = ref('线下处理')
 const newSection = ref(null)
+const processControlPanel = ref(null)
 
 let processStore = useProcessStore()
 
@@ -254,6 +264,21 @@ let shpLayer2;
 let isRotate = false;
 
 let multiplierSpeed = ref(false)
+const workbenchExpanded = ref(false)
+const baseScreenWidth = 2109
+const baseScreenHeight = 1085
+const stageSize = reactive({
+    width: window.innerWidth,
+    height: window.innerHeight
+})
+const stageStyle = computed(() => {
+    const scale = Math.min(stageSize.width / baseScreenWidth, stageSize.height / baseScreenHeight) || 1
+    return {
+        width: `${baseScreenWidth}px`,
+        height: `${baseScreenHeight}px`,
+        transform: `translate(-50%, -50%) scale(${scale})`
+    }
+})
 
 let informationServiceAcitve = ref(1)
 let informationServiceInfoShow = ref(false)
@@ -339,12 +364,14 @@ function changeRotate() {
 const myPopWindow = ref({})
 let mapPopContent = null;
 onMounted(() => {
+    window.addEventListener('resize', updateStageSize)
 
     processStore.registerGraphicCallbacks({
         createGraphic,
         delGraphic,
         reviseGraphic,
-        clearGraphic
+        clearGraphic,
+        focusGraphic: focusGraphicFromHistory
 
     });
     // // 引入 Vue 组件构造器实例化
@@ -358,6 +385,24 @@ onMounted(() => {
 
 
 })
+
+onBeforeUnmount(() => {
+    window.removeEventListener('resize', updateStageSize)
+})
+
+function updateStageSize() {
+    stageSize.width = window.innerWidth
+    stageSize.height = window.innerHeight
+}
+
+// Key change: parent layout reacts to workbench visibility without remounting the flow control view.
+function handleWorkbenchVisibleChange(visible) {
+    workbenchExpanded.value = visible
+}
+
+function openWorkbenchPanel() {
+    processControlPanel.value?.openWorkbench?.()
+}
 
 
 
@@ -486,6 +531,46 @@ function clearGraphic(itemList) {
         if (graphicIndex !== -1) {
             delGraphic(item)
         }
+    });
+}
+
+function focusGraphicFromHistory(item) {
+    if (!map || !map.scene || !map.scene.camera) {
+        console.warn('Map is not ready, skip focusing history item.', item?.id);
+        return;
+    }
+
+    const poly = item?.poly;
+    if (!Array.isArray(poly) || poly.length < 2) {
+        console.warn('Invalid poly data, skip focusing history item.', item?.id, poly);
+        return;
+    }
+
+    const p1 = poly[0];
+    const p2 = poly[1];
+    const lng1 = Number(p1?.lng);
+    const lat1 = Number(p1?.lat);
+    const lng2 = Number(p2?.lng);
+    const lat2 = Number(p2?.lat);
+    const hasInvalidCoord = [lng1, lat1, lng2, lat2].some((value) => Number.isNaN(value));
+    if (hasInvalidCoord) {
+        console.warn('Invalid coordinates, skip focusing history item.', item?.id, poly);
+        return;
+    }
+
+    const centerLng = (lng1 + lng2) / 2;
+    const centerLat = (lat1 + lat2) / 2;
+    // 历史记录定位采用俯视视角，镜头移动到当前图片中心点上方。
+    const focusHeight = Number(item?.focusHeight);
+    const cameraHeight = Number.isFinite(focusHeight) && focusHeight > 0 ? focusHeight : 3000;
+    map.scene.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(centerLng, centerLat, cameraHeight),
+        orientation: {
+            heading: Cesium.Math.toRadians(0),
+            pitch: Cesium.Math.toRadians(-90),
+            roll: 0
+        },
+        duration: 0.8
     });
 }
 
@@ -1541,9 +1626,30 @@ function planRoute(lngmin, lngmax, latmin, latmax, x_num, y_num, x_all, y_all, h
     color: #FBFFC7;
 }
 
+.screen-workbench-toggle {
+    left: 250px;
+    right: auto;
+}
+
 .big-page {
-    height: 100%;
+    height: 100vh;
     width: 100%;
+    overflow: hidden;
+    position: relative;
+    // background: #010814 url("@/assets/img/bigScreen/bg.png") center center no-repeat;
+    background-size: cover;
+}
+
+.big-screen-stage {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform-origin: center center;
+}
+
+.big-screen-shell {
+    width: 100%;
+    height: 100%;
     background-size: 100% 100%;
     position: relative;
 
@@ -1731,15 +1837,46 @@ function planRoute(lngmin, lngmax, latmin, latmax, x_num, y_num, x_all, y_all, h
     }
 
     .detail-page {
-        width: 405px;
+        width: 430px;
         position: absolute;
         top: 86px;
-        bottom: 0;
+        bottom: 20px;
         z-index: 99;
         box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
 
         &.left {
             left: 20px;
+            align-items: stretch;
+
+            .center,
+            .top {
+                flex: 0 0 calc(50% - 7.5px);
+                height: calc(50% - 7.5px);
+                min-height: 0;
+            }
+
+            &.workbench-expanded {
+                width: 700px;
+                bottom: 32px;
+
+                .workbench-stage {
+                    flex: 1 1 auto;
+                    height: 100%;
+                    min-height: 0;
+
+                    :deep(.title) {
+                        display: none;
+                    }
+
+                    :deep(.body) {
+                        height: 100%;
+                        padding-top: 0;
+                    }
+                }
+            }
         }
 
         &.right {
@@ -1747,18 +1884,17 @@ function planRoute(lngmin, lngmax, latmin, latmax, x_num, y_num, x_all, y_all, h
         }
 
         .news {
-            height: calc(50%);
+            height: calc(47% - 7.5px - 50px);
         }
 
         .access {
-            height: calc(50%);
+            height: calc(47% - 7.5px + 100px);
         }
 
         .top,
         .center,
         .bottom {
-            height: calc(50% - 15px);
-            margin-bottom: 15px;
+            flex: 1;
             box-sizing: border-box;
 
             .btn {
