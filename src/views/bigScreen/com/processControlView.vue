@@ -1,4 +1,4 @@
-<template>
+﻿<template>
     <div class="processCtrlBlock" v-if="props.processCtrlData == 1">
         <el-dialog title="确认操作" v-model="dialogVisible.tr" width="30%" @close="closeDialog('tr')">
             <span>是否需要开启边缘设备的实时采集和压缩？</span>
@@ -28,15 +28,27 @@
                     :modal-config="currentModalConfig" :collect-list="currentCollectList"
                     :process-list="currentProcessList" :history-list="currentHistoryList"
                     :collect-pagination="currentCollectPagination" :process-pagination="currentProcessPagination" :history-pagination="currentHistoryPagination"
+                    :collect-selected-ids="currentCollectSelectedIds" :process-selected-ids="currentProcessSelectedIds"
+                    :history-selected-ids="currentHistorySelectedIds" :collect-delete-disabled="currentCollectDeleteDisabled"
+                    :process-delete-disabled="currentProcessDeleteDisabled" :history-delete-disabled="currentHistoryDeleteDisabled"
+                    :collect-delete-disabled-reason="currentCollectDeleteDisabledReason"
+                    :process-delete-disabled-reason="currentProcessDeleteDisabledReason"
+                    :history-delete-disabled-reason="currentHistoryDeleteDisabledReason"
+                    :collect-deleting="currentCollectDeleting" :process-deleting="currentProcessDeleting"
+                    :history-deleting="currentHistoryDeleting"
                     :is-collecting="isCollecting[currentModalType]" :is-interpretate="isInterpretate[currentModalType]" :running="currentWorkbenchRunning"
                     :workbench-status="currentWorkbenchStatus" :camera-speed="cameraSpeed[currentModalType]"
+                    :rgb-capture-config="currentRgbCaptureConfig"
                     :table-height="workbenchTableHeight" :row-class-name="getRowClassName"
                     @close="closeWorkbench" @capture-toggle-request="openControlConfirmDialog"
                     @process-toggle-request="openProcessConfirmDialog"
                     @modal-change="handleModalChange"
                     @transfer="dataTransfer" @recent-page-change="handleRecentPageChange"
                     @history-page-change="handleHistoryPageChange"
-                    @update:camera-speed="(value) => updateCameraSpeed(currentModalType, value)" />
+                    @toggle-selection="updateSelection" @toggle-select-all="updateSelectionForPage"
+                    @batch-delete="handleBatchDelete" @delete-item="handleDeleteItem"
+                    @update:camera-speed="(value) => updateCameraSpeed(currentModalType, value)"
+                    @update:rgb-capture-config="(patch, options) => updateRgbCaptureConfig(currentModalType, patch, options)" />
             </div>
 
             <el-table v-else class="dataTable" :data="graphicQueue" height="350" size='small'
@@ -157,8 +169,21 @@
 <script setup>
 import { computed, ref, onMounted, reactive, toRefs } from 'vue'
 import { getProcess2Result, process2List, startControl } from '../../../api/zhongyan/api';
-import { getRecentData, cameraControl, selectMethod, getHistoryList, transferData } from '@/api/zhongyan/dataManager';
-import { ElMessage } from 'element-plus';
+import {
+    getRecentData,
+    cameraControl,
+    startRgbTimelapseForever,
+    startRgbTimelapse,
+    restartRgbTimelapseForever,
+    restartRgbTimelapse,
+    stopRgbCamera,
+    selectMethod,
+    getHistoryList,
+    transferData,
+    deleteDataItems,
+    clearDataItems
+} from '@/api/zhongyan/dataManager';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { useProcessStore } from "../../../store/modules/process";
 import { modalConfigs, modalList } from './processControl/modalConfig';
 import ProcessWorkbench from './processControl/ProcessWorkbench.vue';
@@ -218,6 +243,11 @@ const listPageSizeMap = {
     history: 5,
 };
 const workbenchTableHeight = 250;
+const RGB_MODAL = 'rgb';
+const RGB_CAPTURE_MODE = {
+    FOREVER: 'forever',
+    COUNT: 'count',
+};
 
 
 let cameraSpeed = reactive({});// 相机速度
@@ -225,6 +255,7 @@ let isCollecting = reactive({});// 是否正在采集
 let isInterpretate = reactive({});// 是否正在解译
 let captureIntervalIds = reactive({}); // 用于存储每个模态的定时器 ID
 let processIntervalIds = reactive({}); // 用于存储每个模态的处理定时器 ID
+let rgbCaptureConfig = reactive({});
 const paginationState = reactive({});
 const workbenchVisible = ref(false);
 const controlConfirmDialog = reactive({
@@ -234,15 +265,39 @@ const controlConfirmDialog = reactive({
     nextState: false,
     message: '',
 });
+const selectionState = reactive({});
+const deletingState = reactive({});
+
+function createDefaultRgbCaptureConfig() {
+    return {
+        captureMode: RGB_CAPTURE_MODE.FOREVER,
+        interval: 3,
+        count: 10,
+        mac: '',
+    };
+}
 
 modalities.forEach(modality => {
     cameraSpeed[modality] = modalConfigs[modality]?.speedMin ?? 0;
     isCollecting[modality] = false;
     isInterpretate[modality] = false;
+    if (modality === RGB_MODAL) {
+        rgbCaptureConfig[modality] = createDefaultRgbCaptureConfig();
+    }
     paginationState[modality] = {
         collect: 1,
         process: 1,
         history: 1,
+    };
+    selectionState[modality] = {
+        collect: [],
+        process: [],
+        history: [],
+    };
+    deletingState[modality] = {
+        collect: false,
+        process: false,
+        history: false,
     };
 });
 
@@ -272,12 +327,275 @@ function updateCameraSpeed(modal, value) {
     cameraSpeed[modal] = value;
 }
 
+function getRgbCaptureConfig(modal = RGB_MODAL) {
+    if (!rgbCaptureConfig[modal]) {
+        rgbCaptureConfig[modal] = createDefaultRgbCaptureConfig();
+    }
+    return rgbCaptureConfig[modal];
+}
+
+function getResponseMessage(res, fallbackMessage) {
+    return res?.message || res?.data?.message || fallbackMessage;
+}
+
+function isRequestSuccess(res) {
+    const status = res?.status ?? res?.data?.status ?? res?.success;
+    if (typeof status === 'boolean') {
+        return status;
+    }
+    if (typeof status === 'string') {
+        return ['success', 'ok', 'true'].includes(status.toLowerCase());
+    }
+    return true;
+}
+
+function getRecentSnapshotTime(modal, listType) {
+    return processStore.getListPagination(modal, listType)?.snapshotTime ?? null;
+}
+
+function validateRgbCaptureConfig(modal = RGB_MODAL, isRestart = false) {
+    const config = getRgbCaptureConfig(modal);
+    const interval = Number(config.interval);
+    const count = Number(config.count);
+    const minValue = 3;
+
+    if (!Number.isFinite(interval) || interval < minValue || interval > 10) {
+        ElMessage({
+            message: 'RGB interval must be between 3 and 10 seconds.',
+            type: 'warning'
+        });
+        return false;
+    }
+
+    if (config.captureMode === RGB_CAPTURE_MODE.COUNT && (!Number.isFinite(count) || count < minValue)) {
+        ElMessage({
+            message: isRestart ? 'RGB count must be greater than 3 when restarting.' : 'RGB count must be greater than 0 when starting.',
+            type: 'warning'
+        });
+        return false;
+    }
+
+    return true;
+}
+
+// 关键修改：RGB 启动和运行中调参统一走专用 timelapse 接口。
+function requestRgbCapture(modal = RGB_MODAL, isRestart = false) {
+    const config = getRgbCaptureConfig(modal);
+    const interval = Number(config.interval);
+    const count = Number(config.count);
+    const mac = config.mac || undefined;
+
+    if (!validateRgbCaptureConfig(modal, isRestart)) {
+        return Promise.reject(new Error('RGB capture config invalid'));
+    }
+
+    if (config.captureMode === RGB_CAPTURE_MODE.FOREVER) {
+        return isRestart
+            ? restartRgbTimelapseForever(interval, mac)
+            : startRgbTimelapseForever(interval, mac);
+    }
+
+    return isRestart
+        ? restartRgbTimelapse(interval, count, mac)
+        : startRgbTimelapse(interval, count, mac);
+}
+
+function startCapturePolling(modal) {
+    if (captureIntervalIds[modal]) {
+        clearInterval(captureIntervalIds[modal]);
+    }
+
+    captureIntervalIds[modal] = setInterval(async () => {
+        try {
+            const response = await getRecentData(modal, 'collect', 1, getRecentSnapshotTime(modal, 'collect'));
+            processStore.appendRecentPageData(modal, 'collect', response?.data);
+            console.log(`获取最新数据(${modal}):`, response);
+        } catch (error) {
+            console.error(`获取数据失败 (${modal}):`, error);
+        }
+    }, 2000);
+}
+
+function stopCapturePolling(modal) {
+    if (captureIntervalIds[modal]) {
+        clearInterval(captureIntervalIds[modal]);
+        delete captureIntervalIds[modal];
+        console.log(`定时器已关闭 (${modal})`);
+    }
+}
+
+function startProcessPolling(modal) {
+    if (processIntervalIds[modal]) {
+        clearInterval(processIntervalIds[modal]);
+    }
+
+    processIntervalIds[modal] = setInterval(async () => {
+        try {
+            const response = await getRecentData(modal, 'process', 1, getRecentSnapshotTime(modal, 'process'));
+            processStore.appendRecentPageData(modal, 'process', response?.data);
+            console.log(`获取最新结果 (${modal}):`, response);
+        } catch (error) {
+            console.error(`获取结果数据失败 (${modal}):`, error);
+        }
+    }, 2000);
+}
+
+function stopProcessPolling(modal) {
+    if (processIntervalIds[modal]) {
+        clearInterval(processIntervalIds[modal]);
+        delete processIntervalIds[modal];
+        console.log(`定时器已关闭 (${modal})`);
+    }
+}
+
+function restartRgbCapture(modal = RGB_MODAL) {
+    if (modal !== RGB_MODAL || !isCollecting[modal]) {
+        return;
+    }
+
+    requestRgbCapture(modal, true).then(res => {
+        if (!isRequestSuccess(res)) {
+            ElMessage({
+                message: getResponseMessage(res, 'RGB采集参数调整失败'),
+                type: 'error'
+            });
+            return;
+        }
+        ElMessage({
+            message: getResponseMessage(res, 'RGB采集参数已更新'),
+            type: 'success'
+        });
+        processStore.setFlyToFlag(true);
+        startCapturePolling(modal);
+    }).catch(err => {
+        ElMessage({
+            message: err.message || 'RGB采集参数调整失败',
+            type: 'error'
+        });
+    });
+}
+
+function updateRgbCaptureConfig(modal, patch = {}, options = {}) {
+    if (modal !== RGB_MODAL) {
+        return;
+    }
+
+    Object.assign(getRgbCaptureConfig(modal), patch);
+
+    if (options.applyIfCollecting) {
+        restartRgbCapture(modal);
+    }
+}
+
 // 关键修改：bench 内切换模态时，所有展示与控制都跟随当前模态联动。
 function handleModalChange(modal) {
     if (!modalConfigs[modal]) {
         return;
     }
     currentModalType.value = modal;
+}
+
+function normalizeItemId(id) {
+    return id == null ? '' : String(id);
+}
+
+function getDeleteKey(item) {
+    return normalizeItemId(item?.name || item?.fileName || item?.id);
+}
+
+function normalizeIdList(ids = []) {
+    return ids.map((id) => normalizeItemId(id)).filter(Boolean);
+}
+
+function getSelectionList(modal, task) {
+    return selectionState[modal]?.[task] || [];
+}
+
+function replaceSelection(modal, task, ids = []) {
+    const target = getSelectionList(modal, task);
+    target.splice(0, target.length, ...normalizeIdList(ids));
+}
+
+function clearSelection(modal, task) {
+    replaceSelection(modal, task, []);
+}
+
+function resetTaskListState(modal, task) {
+    // Key change: starting a new collect/process round must also reset local page, selection and delete state.
+    processStore.resetListPagination(modal, task);
+    paginationState[modal][task] = 1;
+    clearSelection(modal, task);
+    deletingState[modal][task] = false;
+}
+
+async function clearTaskDataAfterStart(modal, task) {
+    // Key change: clear persisted task data before starting the next polling round so old and new sessions never mix.
+    const res = await clearDataItems(modal, task);
+    if (!isRequestSuccess(res)) {
+        throw new Error(getResponseMessage(res, `${getTaskLabel(task)}閲嶇疆澶辫触`));
+    }
+    resetTaskListState(modal, task);
+}
+
+function removeSelectionIds(modal, task, ids = []) {
+    const removeSet = new Set(normalizeIdList(ids));
+    const nextSelection = getSelectionList(modal, task).filter((id) => !removeSet.has(normalizeItemId(id)));
+    replaceSelection(modal, task, nextSelection);
+}
+
+function updateSelection(modal, task, id, checked) {
+    const normalizedId = normalizeItemId(id);
+    if (!normalizedId || isDeleteBlocked(modal, task)) {
+        return;
+    }
+
+    const nextSelection = new Set(getSelectionList(modal, task).map((itemId) => normalizeItemId(itemId)));
+    if (checked) {
+        nextSelection.add(normalizedId);
+    } else {
+        nextSelection.delete(normalizedId);
+    }
+    replaceSelection(modal, task, Array.from(nextSelection));
+}
+
+function updateSelectionForPage(modal, task, ids = [], checked) {
+    if (isDeleteBlocked(modal, task)) {
+        return;
+    }
+
+    const pageIds = normalizeIdList(ids);
+    const nextSelection = new Set(getSelectionList(modal, task).map((itemId) => normalizeItemId(itemId)));
+    pageIds.forEach((id) => {
+        if (checked) {
+            nextSelection.add(id);
+        } else {
+            nextSelection.delete(id);
+        }
+    });
+    replaceSelection(modal, task, Array.from(nextSelection));
+}
+
+function getTaskLabel(task) {
+    const labelMap = {
+        collect: '采集数据',
+        process: '解译结果',
+        history: '历史数据',
+    };
+    return labelMap[task] || '数据';
+}
+
+function getDeleteDisabledReason(modal, task) {
+    if (task === 'collect' && isCollecting[modal]) {
+        return '采集运行中不可删除';
+    }
+    if (task === 'process' && isInterpretate[modal]) {
+        return '解译运行中不可删除';
+    }
+    return '';
+}
+
+function isDeleteBlocked(modal, task) {
+    return Boolean(getDeleteDisabledReason(modal, task) || deletingState[modal]?.[task]);
 }
 
 function normalizePage(modal, listType, total) {
@@ -339,6 +657,19 @@ const currentHistoryList = computed(() => buildPagedList(currentModalType.value,
 const currentCollectPagination = computed(() => buildPagination(currentModalType.value, 'collect'));
 const currentProcessPagination = computed(() => buildPagination(currentModalType.value, 'process'));
 const currentHistoryPagination = computed(() => buildPagination(currentModalType.value, 'history'));
+const currentCollectSelectedIds = computed(() => getSelectionList(currentModalType.value, 'collect'));
+const currentProcessSelectedIds = computed(() => getSelectionList(currentModalType.value, 'process'));
+const currentHistorySelectedIds = computed(() => getSelectionList(currentModalType.value, 'history'));
+const currentCollectDeleteDisabled = computed(() => Boolean(getDeleteDisabledReason(currentModalType.value, 'collect')));
+const currentProcessDeleteDisabled = computed(() => Boolean(getDeleteDisabledReason(currentModalType.value, 'process')));
+const currentHistoryDeleteDisabled = computed(() => Boolean(getDeleteDisabledReason(currentModalType.value, 'history')));
+const currentCollectDeleteDisabledReason = computed(() => getDeleteDisabledReason(currentModalType.value, 'collect'));
+const currentProcessDeleteDisabledReason = computed(() => getDeleteDisabledReason(currentModalType.value, 'process'));
+const currentHistoryDeleteDisabledReason = computed(() => getDeleteDisabledReason(currentModalType.value, 'history'));
+const currentCollectDeleting = computed(() => deletingState[currentModalType.value]?.collect || false);
+const currentProcessDeleting = computed(() => deletingState[currentModalType.value]?.process || false);
+const currentHistoryDeleting = computed(() => deletingState[currentModalType.value]?.history || false);
+const currentRgbCaptureConfig = computed(() => getRgbCaptureConfig(currentModalType.value));
 const currentWorkbenchRunning = computed(() => isCollecting[currentModalType.value] || isInterpretate[currentModalType.value]);
 const currentWorkbenchStatus = computed(() => {
     const collecting = isCollecting[currentModalType.value];
@@ -410,8 +741,8 @@ function getCaptureData(modal, targetState = isCollecting[modal]) {
             }
             captureIntervalIds[modal] = setInterval(async () => {
                 try {
-                    const response = await getRecentData(modal,'collect');
-                    processStore.addItemsToList(modal, 'collect', response.data); // 修改为按模态存储数据
+                    const response = await getRecentData(modal, 'collect', 1, getRecentSnapshotTime(modal, 'collect'));
+                    processStore.appendRecentPageData(modal, 'collect', response?.data); // 关键修改：轮询接口返回 PageResponse，真正的列表数据在 fileList。
                     // 创建Graphic
                     console.log(`获取最新数据 (${modal}):`, response);
                 } catch (error) {
@@ -453,6 +784,83 @@ function getCaptureData(modal, targetState = isCollecting[modal]) {
     }
 }
 
+function handleCaptureControl(modal, targetState = isCollecting[modal]) {
+    const isCol = targetState;
+    console.log("modal:", modal);
+    const camSpeed = cameraSpeed[modal];
+
+    if (isCol) {
+        processStore.watchList(modal, 'collect', (newVal) => {
+            console.log(`采集数据 (${modal}):`, newVal);
+        });
+
+        clearSelection(modal, 'collect');
+
+        const startCaptureRequest = modal === RGB_MODAL
+            ? requestRgbCapture(modal, false)
+            : cameraControl(modal, isCol, camSpeed);
+
+        startCaptureRequest.then(res => {
+            if (!isRequestSuccess(res)) {
+                ElMessage({
+                    message: getResponseMessage(res, '相机开启失败'),
+                    type: 'error'
+                });
+                return;
+            }
+
+            isCollecting[modal] = true;
+            ElMessage({
+                message: getResponseMessage(res, `${modal}相机开启成功`),
+                type: 'success'
+            });
+            processStore.setFlyToFlag(true);
+            clearTaskDataAfterStart(modal, 'collect').then(() => {
+                startCapturePolling(modal);
+            }).catch(err => {
+                ElMessage({
+                    message: err.message || '閲囬泦鏁版嵁閲嶇疆澶辫触',
+                    type: 'error'
+                });
+            });
+        }).catch(err => {
+            ElMessage({
+                message: err.message || '相机开启失败',
+                type: 'error'
+            });
+        });
+        return;
+    }
+
+    // 关键修改：RGB 停止继续走专用 stop 接口，其它模态保持原有通用控制接口。
+    const stopCaptureRequest = modal === RGB_MODAL
+        ? stopRgbCamera(getRgbCaptureConfig(modal).mac || undefined)
+        : cameraControl(modal, isCol);
+
+    stopCaptureRequest.then(res => {
+        if (modal === RGB_MODAL && !isRequestSuccess(res)) {
+            ElMessage({
+                message: getResponseMessage(res, '相机关闭失败'),
+                type: 'error'
+            });
+            return;
+        }
+
+        isCollecting[modal] = false;
+        ElMessage({
+            message: getResponseMessage(res, '相机关闭成功'),
+            type: 'success'
+        });
+        stopCapturePolling(modal);
+    }).catch(err => {
+        isCollecting[modal] = true;
+        ElMessage({
+            message: err.message || '相机关闭失败',
+            type: 'error'
+        });
+    });
+}
+
 /**
  * @description: 获取不同模态的处理结果
  * @param {*} modal
@@ -460,7 +868,7 @@ function getCaptureData(modal, targetState = isCollecting[modal]) {
  */
 function getProcessData(modal, targetState = isInterpretate[modal]) {
     const isInter = targetState;
-    // 检查是否开启解译
+
     if (isInter) {
         processStore.watchList(modal, 'process', (newVal) => {
             console.log(`解译数据 (${modal}):`, newVal);
@@ -469,29 +877,33 @@ function getProcessData(modal, targetState = isInterpretate[modal]) {
             message: `${modal}解译开启中`,
             type: 'info'
         });
+        clearSelection(modal, 'process');
         selectMethod(modal, isInter).then(res => {
+            if (!isRequestSuccess(res)) {
+                ElMessage({
+                    message: getResponseMessage(res, '解译开启失败'),
+                    type: 'error'
+                });
+                return;
+            }
+
             isInterpretate[modal] = true;
             ElMessage({
-                message: `${modal}解译开启成功`,
+                message: getResponseMessage(res, `${modal}解译开启成功`),
                 type: 'success'
             });
-            // 启动定时器并保存定时器 ID
-            if (processIntervalIds[modal]) {
-                clearInterval(processIntervalIds[modal]);
-            }
-            processIntervalIds[modal] = setInterval(async () => {
-                try {
-                    const response = await getRecentData(modal, 'process');
-                    processStore.addItemsToList(modal, 'process', response.data); // 修改为按模态存储数据
-                    // 创建Graphic
-                    console.log(`获取最新结果 (${modal}):`, response);
-                } catch (error) {
-                    console.error(`获取数据结果 (${modal}):`, error);
-                }
-            }, 2000);
+            // 关键修改：开启解译前先清空旧数据，再启动轮询，避免不同批次结果混在一起。
+            clearTaskDataAfterStart(modal, 'process').then(() => {
+                startProcessPolling(modal);
+            }).catch(err => {
+                ElMessage({
+                    message: err.message || '解译数据重置失败',
+                    type: 'error'
+                });
+            });
         }).catch(err => {
             ElMessage({
-                message: err.message || "解译开启失败",
+                message: err.message || '解译开启失败',
                 type: 'error'
             });
         });
@@ -501,21 +913,24 @@ function getProcessData(modal, targetState = isInterpretate[modal]) {
             type: 'info'
         });
         selectMethod(modal, isInter).then(res => {
+            if (!isRequestSuccess(res)) {
+                ElMessage({
+                    message: getResponseMessage(res, '解译关闭失败'),
+                    type: 'error'
+                });
+                return;
+            }
+
             isInterpretate[modal] = false;
+            stopProcessPolling(modal);
             ElMessage({
-                message: "解译关闭成功",
+                message: getResponseMessage(res, '解译关闭成功'),
                 type: 'success'
             });
-            // 关闭对应模态的定时器
-            if (processIntervalIds[modal]) {
-                clearInterval(processIntervalIds[modal]);
-                delete processIntervalIds[modal]; // 删除定时器 ID
-                console.log(`定时器已关闭 (${modal})`);
-            }
         }).catch(err => {
             isInterpretate[modal] = true;
             ElMessage({
-                message: err.message || "解译关闭失败",
+                message: err.message || '解译关闭失败',
                 type: 'error'
             });
         });
@@ -547,7 +962,7 @@ function confirmControlAction() {
     closeControlConfirmDialog();
 
     if (type === 'capture') {
-        getCaptureData(modal, nextState);
+        handleCaptureControl(modal, nextState);
         return;
     }
 
@@ -559,12 +974,146 @@ function confirmControlAction() {
  * @param {*} modal
  * @return {*}
  */
+function getDeleteResult(res, requestedKeys = []) {
+    const failedKeys = normalizeIdList(
+        res?.data?.failedFileNames || res?.data?.failedNames || res?.data?.failedIds || []
+    );
+    const deletedKeys = normalizeIdList(
+        res?.data?.deletedFileNames || res?.data?.deletedNames || res?.data?.deletedIds || []
+    );
+
+    if (deletedKeys.length) {
+        return { deletedKeys, failedKeys };
+    }
+
+    if (failedKeys.length) {
+        const failedKeySet = new Set(failedKeys);
+        return {
+            deletedKeys: normalizeIdList(requestedKeys).filter((key) => !failedKeySet.has(key)),
+            failedKeys,
+        };
+    }
+
+    return {
+        deletedKeys: normalizeIdList(requestedKeys),
+        failedKeys: [],
+    };
+}
+
+async function refreshHistoryAfterDelete(modal) {
+    const currentPage = paginationState[modal].history || 1;
+    const pageData = await getModalHistoryList(modal, currentPage);
+    const fileList = Array.isArray(pageData?.fileList) ? pageData.fileList : [];
+
+    if (!fileList.length && currentPage > 1) {
+        return getModalHistoryList(modal, currentPage - 1);
+    }
+
+    return pageData;
+}
+
+async function executeDelete(modal, task, keys = []) {
+    const normalizedKeys = normalizeIdList(keys);
+    const taskLabel = getTaskLabel(task);
+    const blockedReason = getDeleteDisabledReason(modal, task);
+
+    if (!normalizedKeys.length) {
+        ElMessage({
+            message: `请先选择要删除的${taskLabel}`,
+            type: 'warning'
+        });
+        return;
+    }
+
+    if (blockedReason) {
+        ElMessage({
+            message: blockedReason,
+            type: 'warning'
+        });
+        return;
+    }
+
+    if (deletingState[modal][task]) {
+        return;
+    }
+
+    let confirmMessage = normalizedKeys.length === 1 /*
+        ? `确认删除该${taskLabel}吗？`
+        : `确认删除选中的 ${normalizedIds.length} 条${taskLabel}吗？`;
+
+    */;
+    confirmMessage = normalizedKeys.length === 1
+        ? `Confirm deleting this ${taskLabel}?`
+        : `Confirm deleting ${normalizedKeys.length} selected ${taskLabel} item(s)?`;
+
+    try {
+        await ElMessageBox.confirm(confirmMessage, '删除确认', {
+            confirmButtonText: '删除',
+            cancelButtonText: '取消',
+            type: 'warning',
+            customClass: 'bigscreen-delete-confirm',
+        });
+    } catch (error) {
+        return;
+    }
+
+    deletingState[modal][task] = true;
+
+    try {
+        const res = await deleteDataItems(modal, task, normalizedKeys);
+        const { deletedKeys, failedKeys } = getDeleteResult(res, normalizedKeys);
+
+        if (deletedKeys.length) {
+            processStore.removeItemsFromList(modal, task, deletedKeys);
+            removeSelectionIds(modal, task, deletedKeys);
+
+            if (task === 'history') {
+                await refreshHistoryAfterDelete(modal);
+            }
+        }
+
+        if (failedKeys.length) {
+            ElMessage({
+                message: (deletedKeys.length
+                    ? `Deleted ${deletedKeys.length} ${taskLabel} item(s); ${failedKeys.length} failed.`
+                    : `${taskLabel} deletion failed`) /*
+                    ? `已删除 ${deletedIds.length} 条${taskLabel}，${failedIds.length} 条删除失败`
+                    : `${taskLabel}删除失败`,
+                */,
+                type: deletedKeys.length ? 'warning' : 'error'
+            });
+            return;
+        }
+
+        ElMessage({
+            message: res.message || `${taskLabel}删除成功`,
+            type: 'success'
+        });
+    } catch (err) {
+        ElMessage({
+            message: err.message || `${taskLabel}删除失败`,
+            type: 'error'
+        });
+    } finally {
+        deletingState[modal][task] = false;
+    }
+}
+
+function handleDeleteItem(modal, task, key) {
+    executeDelete(modal, task, [key]);
+}
+
+function handleBatchDelete(modal, task) {
+    executeDelete(modal, task, getSelectionList(modal, task));
+}
+
 function getModalHistoryList(modal, page = 1) {
-    getHistoryList(modal, page).then(res => {
+    return getHistoryList(modal, page).then(res => {
         console.log(`获取${modal}历史数据:`, res);
         const pageData = res.data || {};
         paginationState[modal].history = pageData.page || page;
         processStore.setHistoryPageData(modal, pageData);
+        return pageData;
     }).catch(err => {
         console.error(`获取${modal}历史数据失败:`, err);
     });
@@ -1334,3 +1883,89 @@ function submitUpload() {
     /* 垂直居中 */
 }
 </style>
+
+<style lang="scss">
+.bigscreen-delete-confirm {
+    border: 1px solid rgba(72, 156, 224, 0.36);
+    border-radius: 18px;
+    background:
+        radial-gradient(circle at top right, rgba(69, 186, 255, 0.14), transparent 34%),
+        linear-gradient(180deg, rgba(8, 18, 50, 0.98) 0%, rgba(18, 42, 83, 0.96) 100%);
+    box-shadow: 0 20px 46px rgba(2, 9, 29, 0.38);
+    overflow: hidden;
+}
+
+.bigscreen-delete-confirm .el-message-box__header {
+    padding: 18px 22px 10px;
+}
+
+.bigscreen-delete-confirm .el-message-box__title {
+    color: #f3f8ff;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.bigscreen-delete-confirm .el-message-box__headerbtn .el-message-box__close {
+    color: rgba(214, 235, 255, 0.72);
+}
+
+.bigscreen-delete-confirm .el-message-box__headerbtn:hover .el-message-box__close {
+    color: #ffffff;
+}
+
+.bigscreen-delete-confirm .el-message-box__content {
+    padding: 10px 22px 22px;
+}
+
+.bigscreen-delete-confirm .el-message-box__container {
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.bigscreen-delete-confirm .el-message-box__status {
+    color: #66cfff !important;
+    font-size: 22px !important;
+}
+
+.bigscreen-delete-confirm .el-message-box__message {
+    color: #d7ecff;
+    font-size: 14px;
+    line-height: 1.75;
+}
+
+.bigscreen-delete-confirm .el-message-box__btns {
+    padding: 0 22px 20px;
+}
+
+.bigscreen-delete-confirm .el-button {
+    min-width: 92px;
+    border-radius: 999px;
+}
+
+.bigscreen-delete-confirm .el-button--default {
+    border-color: rgba(102, 185, 255, 0.28);
+    background: rgba(23, 93, 131, 0.14);
+    color: #d7ecff;
+}
+
+.bigscreen-delete-confirm .el-button--default:hover,
+.bigscreen-delete-confirm .el-button--default:focus {
+    border-color: rgba(129, 212, 255, 0.54);
+    background: rgba(34, 128, 196, 0.22);
+    color: #ffffff;
+}
+
+.bigscreen-delete-confirm .el-button--primary {
+    border-color: rgba(102, 185, 255, 0.42);
+    background: linear-gradient(135deg, rgba(34, 128, 196, 0.95), rgba(23, 93, 131, 0.95));
+    box-shadow: inset 0 0 0 1px rgba(119, 201, 255, 0.18);
+    color: #ffffff;
+}
+
+.bigscreen-delete-confirm .el-button--primary:hover,
+.bigscreen-delete-confirm .el-button--primary:focus {
+    border-color: rgba(129, 212, 255, 0.68);
+    background: linear-gradient(135deg, rgba(47, 154, 227, 0.96), rgba(28, 108, 168, 0.96));
+}
+</style>
+

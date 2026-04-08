@@ -50,6 +50,62 @@ export function cameraControl(type = 'rgb', status = true, camSpeed = 100) {
     })
 }
 
+export function startRgbTimelapseForever(interval, mac) {
+    return request({
+        url: '/v2/camera/rgb/timelapse/forever',
+        method: 'get',
+        params: {
+            interval: interval,
+            mac: mac
+        }
+    })
+}
+
+export function startRgbTimelapse(interval, count, mac) {
+    return request({
+        url: '/v2/camera/rgb/timelapse',
+        method: 'get',
+        params: {
+            interval: interval,
+            count: count,
+            mac: mac
+        }
+    })
+}
+
+export function restartRgbTimelapseForever(interval, mac) {
+    return request({
+        url: '/v2/camera/rgb/timelapse/forever/restart',
+        method: 'get',
+        params: {
+            interval: interval,
+            mac: mac
+        }
+    })
+}
+
+export function restartRgbTimelapse(interval, count, mac) {
+    return request({
+        url: '/v2/camera/rgb/timelapse/restart',
+        method: 'get',
+        params: {
+            interval: interval,
+            count: count,
+            mac: mac
+        }
+    })
+}
+
+export function stopRgbCamera(mac) {
+    return request({
+        url: '/v2/camera/rgb/stop',
+        method: 'get',
+        params: {
+            mac: mac
+        }
+    })
+}
+
 /**
  * @description: 选择处理方法
  * @param {*} type
@@ -90,6 +146,29 @@ export function getHistoryList(type = 'rgb', page = 1) {
  * @param {*} task
  * @return {*}
  */
+export function deleteDataItems(type = 'rgb', task = 'collect', names = []) {
+    return request({
+        url: '/v2/data/items',
+        method: 'delete',
+        data: {
+            type,
+            task,
+            names
+        }
+    })
+}
+
+export function clearDataItems(type = 'rgb', task = 'collect') {
+    return request({
+        url: '/v2/data/items/all',
+        method: 'delete',
+        data: {
+            type,
+            task
+        }
+    })
+}
+
 export function transferData(modal = 'rgb', task = 'collect') {
     return request({
         url: '/v2/data/transfer',
@@ -117,4 +196,3 @@ export function transferControl(status = true){
         }
     })
 }
-

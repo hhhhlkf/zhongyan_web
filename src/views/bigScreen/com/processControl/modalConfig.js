@@ -7,7 +7,7 @@
         entryLabel: 'RGB模块',
         themeClass: 'theme-rgb',
         statusText: '可见光采集链路',
-        speedMin: 0,
+        speedMin: 3,
         speedMax: 10,
     },
     llt: {

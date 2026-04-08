@@ -94,6 +94,7 @@ export function getDeviceStatus(deviceList = []) {
     return request({
         url: '/v2/device/info',
         method: 'get',
+        silentError: true,
         params: {
             deviceList: deviceList.join(',')
         }

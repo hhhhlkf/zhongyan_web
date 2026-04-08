@@ -41,6 +41,14 @@ function createModalLists() {
     };
 }
 
+function normalizeListItemId(id) {
+    return id == null ? '' : String(id);
+}
+
+function getListDeleteKey(item) {
+    return normalizeListItemId(item?.name || item?.fileName || item?.id);
+}
+
 export const useProcessStore = defineStore('process', {
     state: () => ({
         lists: {
@@ -203,6 +211,24 @@ export const useProcessStore = defineStore('process', {
             return this.lists[modal]?.[listType] || []; // Return an empty array when the list is missing
         },
 
+        removeItemsFromList(modal, listType, keys = []) {
+            const modalLists = this.ensureModalLists(modal);
+            const normalizedKeys = new Set(keys.map((key) => normalizeListItemId(key)).filter(Boolean));
+            if (!normalizedKeys.size) {
+                return [];
+            }
+
+            // Key change: remove displayed graphics before mutating list data so map state stays in sync.
+            const removedItems = modalLists[listType].filter((item) => normalizedKeys.has(getListDeleteKey(item)));
+            if (!removedItems.length) {
+                return [];
+            }
+
+            this._graphicCallbacks.clear?.(removedItems);
+            modalLists[listType] = modalLists[listType].filter((item) => !normalizedKeys.has(getListDeleteKey(item)));
+            return removedItems;
+        },
+
         // Clear list content
         clearList(modal, listType) {
             if (this.lists[modal]?.[listType]) {
@@ -222,6 +248,22 @@ export const useProcessStore = defineStore('process', {
         addItemsToList(modal, listType, items) {
             const modalLists = this.ensureModalLists(modal);
             modalLists[listType].push(...items);
+        },
+
+        // 关键修改：轮询接口返回的是 PageResponse，这里统一提取 fileList 并维护 snapshotTime。
+        appendRecentPageData(modal, listType, payload = {}) {
+            const modalLists = this.ensureModalLists(modal);
+            const paginationKey = `${listType}Pagination`;
+            const currentList = Array.isArray(modalLists[listType]) ? modalLists[listType] : [];
+            const incomingList = Array.isArray(payload?.fileList) ? payload.fileList : [];
+            const existingIds = new Set(currentList.map((item) => normalizeListItemId(item?.id)).filter(Boolean));
+            const nextItems = incomingList.filter((item) => !existingIds.has(normalizeListItemId(item?.id)));
+
+            modalLists[listType].push(...nextItems);
+
+            if (modalLists[paginationKey]) {
+                modalLists[paginationKey].snapshotTime = payload?.snapshotTime ?? null;
+            }
         },
 
         // Key change: keep paged list data and pagination metadata together in the store.
