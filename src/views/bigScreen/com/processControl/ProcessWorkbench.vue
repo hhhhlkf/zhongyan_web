@@ -13,11 +13,23 @@
                 </div>
             </div>
 
-            <div class="process-workbench__modal-switch">
-                <button v-for="modal in modalOptions" :key="modal.key" type="button" class="process-modal-switch__item"
-                    :class="{ active: modalType === modal.type }" @click="$emit('modal-change', modal.type)">
-                    {{ getModalDisplayName(modal) }}
-                </button>
+            <div class="process-workbench__modal-switch-row">
+                <div class="process-workbench__modal-switch">
+                    <button v-for="modal in modalOptions" :key="modal.key" type="button" class="process-modal-switch__item"
+                        :class="{ active: modalType === modal.type }" @click="$emit('modal-change', modal.type)">
+                        {{ getModalDisplayName(modal) }}
+                    </button>
+                </div>
+                <div v-if="isRgbModal" class="process-workbench__utility-switch">
+                    <button type="button" class="process-modal-switch__item process-modal-switch__item--utility"
+                        :class="{ active: isUavVisible }" @click="$emit('uav-visibility-toggle-request', modalType, true)">
+                        {{ text.showUav }}
+                    </button>
+                    <button type="button" class="process-modal-switch__item process-modal-switch__item--utility"
+                        :class="{ active: !isUavVisible }" @click="$emit('uav-visibility-toggle-request', modalType, false)">
+                        {{ text.hideUav }}
+                    </button>
+                </div>
             </div>
 
             <div class="process-workbench__controls">
@@ -165,6 +177,7 @@ const props = defineProps({
             mac: '',
         }),
     },
+    isUavVisible: { type: Boolean, default: false },
     tableHeight: { type: Number, required: true },
     rowClassName: { type: Function, required: true },
 });
@@ -174,6 +187,7 @@ const emit = defineEmits([
     'modal-change',
     'capture-toggle-request',
     'process-toggle-request',
+    'uav-visibility-toggle-request',
     'transfer',
     'recent-page-change',
     'history-page-change',
@@ -214,6 +228,8 @@ const text = {
     rgb: '\u53ef\u89c1\u5149',
     llt: '\u5fae\u5149\u7ea2\u5916',
     hsi: '\u9ad8\u5149\u8c31',
+    showUav: '展示无人机',
+    hideUav: '关闭展示',
 };
 
 const tabs = [
@@ -419,11 +435,31 @@ function handleRgbCountChange(value) {
     margin-bottom: 20px;
 }
 
-.process-workbench__modal-switch {
+.process-workbench__modal-switch-row {
     display: flex;
     align-items: center;
     gap: 12px;
     margin-bottom: 18px;
+    flex-wrap: wrap;
+}
+
+.process-workbench__modal-switch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px;
+    border-radius: 999px;
+    background: rgba(8, 25, 55, 0.72);
+    box-shadow: inset 0 0 0 1px rgba(90, 176, 244, 0.14);
+    width: fit-content;
+    max-width: 100%;
+    flex-wrap: wrap;
+}
+
+.process-workbench__utility-switch {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     padding: 8px;
     border-radius: 999px;
     background: rgba(8, 25, 55, 0.72);
@@ -442,6 +478,10 @@ function handleRgbCountChange(value) {
     color: #d9edff;
     cursor: pointer;
     transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.process-modal-switch__item--utility {
+    min-width: 118px;
 }
 
 .process-modal-switch__item:hover,

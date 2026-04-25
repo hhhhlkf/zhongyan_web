@@ -94,7 +94,11 @@ export function getDeviceStatus(deviceList = []) {
     return request({
         url: '/v2/device/info',
         method: 'get',
+        timeout: 20000,
         silentError: true,
+        headers: {
+            isToken: false
+        },
         params: {
             deviceList: deviceList.join(',')
         }
@@ -118,7 +122,8 @@ export function getTransSchedule() {
 export function getTransRate() {
     return request({
         url: '/v1/transport/rate',
-        method: 'get'
+        method: 'get',
+        silentError: true
     })
 }
 
@@ -159,5 +164,33 @@ export function getAreaData(areaName) {
         params: {
             folderName: areaName
         }
+    })
+}
+
+export function getCurrentUavMission() {
+    return request({
+        url: '/v2/uav/mission/current',
+        method: 'get',
+        silentError: true
+    })
+}
+
+export function getRealtimeUavState(missionId, since) {
+    return request({
+        url: '/v2/uav/realtime/state',
+        method: 'get',
+        silentError: true,
+        params: {
+            missionId,
+            since
+        }
+    })
+}
+
+export function getRealtimeUavInfo() {
+    return request({
+        url: '/v2/uav/info/realtime',
+        method: 'get',
+        silentError: true
     })
 }

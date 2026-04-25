@@ -63,7 +63,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import * as echarts from 'echarts';
 import { getDeviceStatus, getLogInfo, getSourceUse, getTransRate, getTransSchedule } from '../../../api/zhongyan/api';
 import { set } from '@vueuse/core';
@@ -97,6 +97,7 @@ let deviceTimer = null;
 let logTimer = null;
 let percentageTimer = null;
 let transRateTimer = null;
+let devicePollingStopped = false;
 
 
 function handleRowClick(index) {
@@ -293,21 +294,41 @@ function drawSourceCircle() {
 }
 
 
+function scheduleNextDevicePoll(delay = 10000) {
+    if (devicePollingStopped) {
+        return;
+    }
+    deviceTimer = setTimeout(() => {
+        pollDeviceStatus();
+    }, delay);
+}
+
+function pollDeviceStatus() {
+    if (devicePollingStopped) {
+        return;
+    }
+    // console.log('fetch device status', device);
+    getDeviceStatus(device).then(res => {
+        if (res.code == 200) {
+            // console.log('device status:', res.data.status);
+            let devStatus = res.data.status
+            for (let i = 0; i < devStatus.length; i++) {
+                deviceStatuses[i].type = statusWord[devStatus[i]];
+                deviceStatuses[i].text = statusText[devStatus[i]];
+            }
+        }
+        // printf('Next device status poll scheduled in 10 seconds');
+    }).catch(err => {
+        console.log(err);
+    }).finally(() => {
+        scheduleNextDevicePoll();
+    });
+}
+
 onMounted(() => {
     window.addEventListener('resize', handleResize);
-    deviceTimer = setInterval(() => {
-        getDeviceStatus(device).then(res => {
-            if (res.code == 200) {
-                let devStatus = res.data.status
-                for (let i = 0; i < devStatus.length; i++) {
-                    deviceStatuses[i].type = statusWord[devStatus[i]];
-                    deviceStatuses[i].text = statusText[devStatus[i]];
-                }
-            }
-        }).catch(err => {
-            console.log(err);
-        });
-    }, 5000);
+    devicePollingStopped = false;
+    pollDeviceStatus();
 
     logTimer = setInterval(() => {
         getLogInfo().then(res => {
@@ -469,15 +490,16 @@ onMounted(() => {
                     transChart.setOption(option);
                 }
             }
-        }).catch(err => {
-            console.log(err);
+        }).catch(() => {
+            // 传输速率接口可能在后台未就绪时返回 500，前端保持现有曲线不打断大屏展示。
         });
     }, 2000)
 });
 
 onBeforeUnmount(() => {
+    devicePollingStopped = true;
     window.removeEventListener('resize', handleResize);
-    clearInterval(deviceTimer);
+    clearTimeout(deviceTimer);
     clearInterval(logTimer);
     clearInterval(percentageTimer);
     clearInterval(transRateTimer);

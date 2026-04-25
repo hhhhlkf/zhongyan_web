@@ -49,10 +49,114 @@ function getListDeleteKey(item) {
     return normalizeListItemId(item?.name || item?.fileName || item?.id);
 }
 
+function normalizeCoordinatePoint(point = {}) {
+    const lng = Number(point?.lng ?? point?.lon ?? point?.longitude ?? point?.x);
+    const lat = Number(point?.lat ?? point?.latitude ?? point?.y);
+    const alt = Number(point?.alt ?? point?.height ?? point?.z ?? 0);
+
+    if (Number.isNaN(lng) || Number.isNaN(lat)) {
+        return null;
+    }
+
+    return { lng, lat, alt };
+}
+
+// 关键修改：workbench 新链路只接受四点 poly，避免再从 corners/矩形边界反推坐标。
+function buildPolyFromBounds(item = {}) {
+    const lngmin = Number(item?.lngmin);
+    const lngmax = Number(item?.lngmax);
+    const latmin = Number(item?.latmin);
+    const latmax = Number(item?.latmax);
+
+    if ([lngmin, lngmax, latmin, latmax].some((value) => Number.isNaN(value))) {
+        return [];
+    }
+
+    return [
+        { lng: lngmin, lat: latmax, alt: 0 },
+        { lng: lngmax, lat: latmax, alt: 0 },
+        { lng: lngmax, lat: latmin, alt: 0 },
+        { lng: lngmin, lat: latmin, alt: 0 },
+    ];
+}
+
+function createRecentWatchSnapshot(item = {}) {
+    return {
+        id: normalizeListItemId(item?.id),
+        graphic: item?.graphic ?? true,
+    };
+}
+
+// 关键修改：recent 数据优先使用 poly，缺失时回退到 corners 或经纬度边界，确保底图贴图链路不断。
+function normalizePoly(item = {}) {
+    const rawPoly = Array.isArray(item?.poly) && item.poly.length
+        ? item.poly
+        : (Array.isArray(item?.corners) ? item.corners : []);
+    if (rawPoly.length < 4) {
+        return buildPolyFromBounds(item);
+    }
+
+    const poly = rawPoly
+        .map((point) => normalizeCoordinatePoint(point))
+        .filter(Boolean);
+
+    if (poly.length < 4) {
+        return buildPolyFromBounds(item);
+    }
+
+    return poly.slice(0, 4);
+}
+
+function normalizeUavPosition(item = {}) {
+    return normalizeCoordinatePoint(
+        item?.uavPosition || item?.sourcePosition || item?.position || {
+            lng: item?.lng,
+            lat: item?.lat,
+            alt: item?.alt,
+        }
+    );
+}
+
+function normalizeRecentListItem(item = {}, listType = 'collect') {
+    const id = normalizeListItemId(item?.id || item?.captureId || item?.resultId || item?.fileName || item?.name);
+    const task = item?.task || listType;
+    const source = item?.source || (listType === 'history' ? 'history' : `recent-${listType}`);
+    const name = item?.name || item?.fileName || id;
+    const time = item?.time || item?.fileDate || item?.captureTime || item?.resultTime || item?.createdAt || '';
+    const imageUrl = item?.imageUrl || item?.resultUrl || item?.url || item?.path || '';
+    const poly = normalizePoly(item);
+    const lngList = poly.map((point) => point.lng);
+    const latList = poly.map((point) => point.lat);
+
+    return {
+        ...item,
+        id,
+        name,
+        time,
+        task,
+        source,
+        graphic: item?.graphic ?? (listType === 'history' ? false : true),
+        imageUrl,
+        corners: poly,
+        poly,
+        lngmin: poly.length ? Math.min(...lngList) : Number(item?.lngmin),
+        lngmax: poly.length ? Math.max(...lngList) : Number(item?.lngmax),
+        latmin: poly.length ? Math.min(...latList) : Number(item?.latmin),
+        latmax: poly.length ? Math.max(...latList) : Number(item?.latmax),
+        imageType: item?.imageType || task,
+        captureId: item?.captureId || item?.id || '',
+        missionId: item?.missionId || '',
+        captureTime: item?.captureTime || item?.fileDate || '',
+        resultTime: item?.resultTime || '',
+        sourcePosition: normalizeCoordinatePoint(item?.sourcePosition) || normalizeUavPosition(item),
+        uavPosition: normalizeUavPosition(item),
+    };
+}
+
 export const useProcessStore = defineStore('process', {
     state: () => ({
         lists: {
-            // Modal item shape: { id, name, time, graphic, poly, task, path, type }
+            // Modal item shape: { id, name, time, graphic, poly[4], task, path, type }
             rgb: {
                 collect: [],
                 process: [], // Process list
@@ -181,12 +285,13 @@ export const useProcessStore = defineStore('process', {
         // },
 
         convertToSurroundingPoints(item) {
-            const surroundingPoints = [
-                [item.poly[0].lng, item.poly[1].lat, 0],
-                [item.poly[1].lng, item.poly[1].lat, 0],
-                [item.poly[1].lng, item.poly[0].lat, 0],
-                [item.poly[0].lng, item.poly[0].lat, 0]
-            ];
+            const surroundingPoints = Array.isArray(item?.poly)
+                ? item.poly
+                    .map((point) => normalizeCoordinatePoint(point))
+                    .filter(Boolean)
+                    .slice(0, 4)
+                    .map((point) => [point.lng, point.lat, point.alt ?? 0])
+                : [];
             console.log('surroundingPoints: ', surroundingPoints);
             return surroundingPoints;
         },
@@ -256,10 +361,14 @@ export const useProcessStore = defineStore('process', {
             const paginationKey = `${listType}Pagination`;
             const currentList = Array.isArray(modalLists[listType]) ? modalLists[listType] : [];
             const incomingList = Array.isArray(payload?.fileList) ? payload.fileList : [];
+            const normalizedIncomingList = incomingList.map((item) => normalizeRecentListItem(item, listType));
             const existingIds = new Set(currentList.map((item) => normalizeListItemId(item?.id)).filter(Boolean));
-            const nextItems = incomingList.filter((item) => !existingIds.has(normalizeListItemId(item?.id)));
+            const nextItems = normalizedIncomingList.filter((item) => !existingIds.has(normalizeListItemId(item?.id)));
 
             modalLists[listType].push(...nextItems);
+            nextItems.forEach((item) => {
+                this._graphicCallbacks.revise?.(item);
+            });
 
             if (modalLists[paginationKey]) {
                 modalLists[paginationKey].snapshotTime = payload?.snapshotTime ?? null;
@@ -282,7 +391,9 @@ export const useProcessStore = defineStore('process', {
             const paginationKey = `${listType}Pagination`;
 
             this._graphicCallbacks.clear?.(modalLists[listType]);
-            modalLists[listType] = Array.isArray(fileList) ? fileList : [];
+            modalLists[listType] = Array.isArray(fileList)
+                ? fileList.map((item) => normalizeRecentListItem(item, listType))
+                : [];
             modalLists[paginationKey] = {
                 page,
                 pageSize,
@@ -340,16 +451,26 @@ export const useProcessStore = defineStore('process', {
                 return;
             }
 
-            // Keep a cloned copy for diff checks
-            let oldListClone = JSON.parse(JSON.stringify(this.lists[modal][listType]));
+            // Keep a lightweight snapshot so recent polling only reacts to checkbox visibility changes.
+            let oldListClone = this.lists[modal][listType].map((item) => createRecentWatchSnapshot(item));
 
             this.watchers[key] = watch(
                 () => this.lists[modal][listType],
                 (newList) => {
                     if (listType !== 'history') {
+                        const oldGraphicMap = new Map(
+                            oldListClone.map((item) => [normalizeListItemId(item?.id), item?.graphic])
+                        );
                         newList.forEach((newItem) => {
-                            console.log('newItem and oldItem:', newItem.graphic);
-                            this._graphicCallbacks.revise?.(newItem);
+                            const itemId = normalizeListItemId(newItem?.id);
+                            if (!itemId || !oldGraphicMap.has(itemId)) {
+                                return;
+                            }
+
+                            const oldGraphic = oldGraphicMap.get(itemId);
+                            if (oldGraphic !== newItem.graphic) {
+                                this._graphicCallbacks.revise?.(newItem);
+                            }
                         });
                     } else {
                         newList.forEach((newItem, index) => {
@@ -372,7 +493,9 @@ export const useProcessStore = defineStore('process', {
                     }
 
                     // Refresh the cloned snapshot
-                    oldListClone = JSON.parse(JSON.stringify(newList));
+                    oldListClone = listType === 'history'
+                        ? JSON.parse(JSON.stringify(newList))
+                        : newList.map((item) => createRecentWatchSnapshot(item));
                 },
                 { deep: true, immediate: true }
             );

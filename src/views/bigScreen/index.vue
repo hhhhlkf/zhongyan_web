@@ -167,10 +167,12 @@
                     <!-- <informationService :active="informationServiceAcitve" @openInfo="openInformationServiceInfo">
                     </informationService> -->
                     <processControlView ref="processControlPanel" :processCtrlData="informationServiceAcitve" :changeRotate="changeRotate"
-                        :graphicQueue="graphicQueue" :updateProcess="updateProcess" :updateEvaluate="updateEvaluate"
+                        :graphicQueue="processPanelGraphicQueue" :updateProcess="updateProcess" :updateEvaluate="updateEvaluate"
                         :showgraphic="showgraphic" :toggleIsVisible="toggleIsVisible" :areaLabel="areaLabel"
                         :getProcessResult="getProcessResult" :bindMourseClick="bindMourseClick"
-                        @workbench-visible-change="handleWorkbenchVisibleChange">
+                        @workbench-visible-change="handleWorkbenchVisibleChange"
+                        @realtime-uav-update="handleRealtimeUavUpdate"
+                        @realtime-uav-visibility-change="handleRealtimeUavVisibilityChange">
                     </processControlView>
                 </template>
             </outPage>
@@ -284,7 +286,8 @@ let informationServiceAcitve = ref(1)
 let informationServiceInfoShow = ref(false)
 let informationServiceInfoType = ref('')
 let graphicQueue = reactive([])
-let graphicQueueLocal = reactive([])
+let graphicQueueLocal = []
+const processPanelGraphicQueue = computed(() => graphicQueue.filter((item) => item?.source !== 'realtime-transfer'))
 let isProcess = ref(false)
 // let isTrans = ref(false)
 let isEvaluate = ref(false)
@@ -301,6 +304,25 @@ let pointIdList = reactive([])
 let generView = ref(false)
 let timeMode = ref('夜间模式')
 let timeModeFlag = ref(true)
+const OVERLAY_Z_INDEX = {
+    collect: 200,
+    process: 100
+}
+let uavRoutePositions = reactive([])
+let overlayRegistry = {}
+let realtimeUavLastTimestamp = ''
+let realtimeUavGraphic = null
+let realtimeUavTrackLine = null
+let realtimeUavScanGraphic = null
+let realtimeUavHasFocusedStart = false
+let realtimeUavScanAnimationTimer = null
+let realtimeUavScanPulse = 0
+let realtimeUavModelUrl = "//data.mars3d.cn/gltf/mars/wrj.glb"
+const overlayDisplayDuration = 3000
+let pendingOverlayQueue = reactive([])
+let pendingOverlayKeySet = new Set()
+let overlayPlaybackTimer = null
+let overlayPlaybackRunning = false
 function toggleIsVisible(flag) {
     isVis.value = flag
 }
@@ -383,11 +405,21 @@ onMounted(() => {
         showDetail: showDetail,
     };
 
+    getServerIp().then((res) => {
+        if (res?.code === 200 && res?.data?.ip) {
+            realtimeUavModelUrl = `http://${res.data.ip}:8088/v2/static/uav.gltf`
+        }
+    }).catch((error) => {
+        console.warn('Failed to resolve realtime UAV model url, fallback to default model.', error)
+    })
+
 
 })
 
 onBeforeUnmount(() => {
     window.removeEventListener('resize', updateStageSize)
+    stopRealtimeUavMission()
+    clearOverlayPlaybackQueue()
 })
 
 function updateStageSize() {
@@ -411,12 +443,264 @@ function marsOnload(_map) {
     window.mapobj = map
     graphicLayer = new mars3d.layer.GraphicLayer()
     map.addLayer(graphicLayer)
+    ensureOverlayGraphicLayers()
     // processStore.setGraphicLayer(graphicLayer)
     // addUAVGraphic(UAVLayer)
 
 }
 
-let patchList = reactive([]) // 用于存储图形对象的列表
+let patchList = [] // 用于存储图形对象的列表
+
+let collectOverlayLayer = null
+let processOverlayLayer = null
+
+function ensureOverlayGraphicLayers() {
+    if (!map) {
+        return
+    }
+
+    // 关键修改：采集贴图与处理贴图固定分层，保证 process 永远覆盖在 collect 之上。
+    if (!collectOverlayLayer) {
+        collectOverlayLayer = new mars3d.layer.GraphicLayer()
+        map.addLayer(collectOverlayLayer)
+    }
+
+    if (!processOverlayLayer) {
+        processOverlayLayer = new mars3d.layer.GraphicLayer()
+        map.addLayer(processOverlayLayer)
+    }
+}
+
+function getOverlayLayer(task = 'collect') {
+    ensureOverlayGraphicLayers()
+    return task === 'process' ? collectOverlayLayer : processOverlayLayer
+}
+
+function getFullImageUrl(url = '') {
+    if (!url) {
+        return '';
+    }
+    if (/^https?:\/\//.test(url)) {
+        return url;
+    }
+    return `http://${url.replace(/^\/+/, '')}`;
+}
+
+function getOverlayKey(item = {}) {
+    return String(item.id || item.captureId || item.resultId || item.name || item.fileName || '');
+}
+
+function normalizeCornerPoint(point = {}) {
+    const lng = Number(point?.lng ?? point?.lon ?? point?.longitude ?? point?.x);
+    const lat = Number(point?.lat ?? point?.latitude ?? point?.y);
+    const alt = Number(point?.alt ?? point?.height ?? point?.z ?? 0);
+    if (Number.isNaN(lng) || Number.isNaN(lat)) {
+        return null;
+    }
+    return { lng, lat, alt };
+}
+
+function resolveOverlayPositionsFromBounds(item = {}) {
+    const lngmin = Number(item?.lngmin);
+    const lngmax = Number(item?.lngmax);
+    const latmin = Number(item?.latmin);
+    const latmax = Number(item?.latmax);
+    if ([lngmin, lngmax, latmin, latmax].some((value) => Number.isNaN(value))) {
+        return [];
+    }
+
+    return [
+        [lngmin, latmax, 0],
+        [lngmax, latmax, 0],
+        [lngmax, latmin, 0],
+        [lngmin, latmin, 0],
+    ];
+}
+
+function resolveOverlayPositions(item = {}) {
+    const rawPoly = Array.isArray(item?.poly) && item.poly.length
+        ? item.poly
+        : (Array.isArray(item?.corners) ? item.corners : []);
+    if (!Array.isArray(rawPoly) || rawPoly.length < 4) {
+        return resolveOverlayPositionsFromBounds(item);
+    }
+
+    const polyCorners = rawPoly.map(normalizeCornerPoint).filter(Boolean);
+    if (polyCorners.length < 4) {
+        return resolveOverlayPositionsFromBounds(item);
+    }
+
+    return polyCorners.slice(0, 4).map((point) => [point.lng, point.lat, point.alt ?? 0]);
+}
+
+function getOverlayBounds(item = {}) {
+    const positions = resolveOverlayPositions(item);
+    if (!positions.length) {
+        return null;
+    }
+
+    const lngList = positions.map((position) => position[0]);
+    const latList = positions.map((position) => position[1]);
+    return {
+        xmin: Math.min(...lngList),
+        xmax: Math.max(...lngList),
+        ymin: Math.min(...latList),
+        ymax: Math.max(...latList),
+        height: 3000
+    };
+}
+
+function isOverlayItem(item = {}) {
+    return !!((item?.type === 'rgb' || item?.imageUrl || item?.url || item?.path)
+        && resolveOverlayPositions(item).length >= 4);
+}
+
+function getOverlayZIndex(task = 'collect') {
+    return OVERLAY_Z_INDEX[task] || OVERLAY_Z_INDEX.collect;
+}
+
+function isRecentOverlaySource(source = '') {
+    return String(source).startsWith('recent-');
+}
+
+function clearOverlayPlaybackQueue() {
+    pendingOverlayQueue.splice(0, pendingOverlayQueue.length)
+    pendingOverlayKeySet.clear()
+    overlayPlaybackRunning = false
+    if (overlayPlaybackTimer) {
+        clearTimeout(overlayPlaybackTimer)
+        overlayPlaybackTimer = null
+    }
+}
+
+function playNextOverlayInQueue() {
+    if (overlayPlaybackRunning) {
+        return
+    }
+
+    const nextTask = pendingOverlayQueue.shift()
+    if (!nextTask) {
+        return
+    }
+
+    overlayPlaybackRunning = true
+    pendingOverlayKeySet.delete(nextTask.key)
+
+    const overlayGraphic = addOrUpdateImageOverlay(nextTask.item, nextTask.task)
+    const overlayBounds = getOverlayBounds(nextTask.item)
+    if (!overlayGraphic) {
+        overlayPlaybackRunning = false
+        playNextOverlayInQueue()
+        return
+    }
+
+    overlayGraphic.show = nextTask.item.graphic !== false
+    if (overlayBounds && overlayGraphic.show && map) {
+        map.flyToExtent(overlayBounds, { duration: 0.5 })
+        processStore.setFlyToFlag(false)
+    }
+
+    overlayPlaybackTimer = setTimeout(() => {
+        overlayPlaybackRunning = false
+        overlayPlaybackTimer = null
+        playNextOverlayInQueue()
+    }, overlayDisplayDuration)
+}
+
+function enqueueOverlayPlayback(item, task = item?.task || 'collect') {
+    const key = getOverlayKey(item)
+    if (!key || pendingOverlayKeySet.has(key)) {
+        return
+    }
+
+    pendingOverlayKeySet.add(key)
+    pendingOverlayQueue.push({
+        key,
+        task,
+        item: {
+            ...item,
+            task
+        }
+    })
+    playNextOverlayInQueue()
+}
+
+function updateOverlayListEntry(item, graphic) {
+    const key = getOverlayKey(item);
+    if (!key) {
+        return;
+    }
+
+    const queueIndex = graphicQueue.findIndex((queueItem) => String(queueItem.id) === key);
+    const queueItem = {
+        id: key,
+        name: item.name || item.fileName || key,
+        type: item.time || item.captureTime || item.resultTime || item.fileDate || '',
+        task: item.task || 'collect',
+        source: item.source || '',
+        graphic: graphic.show
+    };
+    if (queueIndex === -1) {
+        graphicQueue.push(queueItem);
+    } else {
+        graphicQueue[queueIndex] = {
+            ...graphicQueue[queueIndex],
+            ...queueItem
+        };
+    }
+
+    const localIndex = graphicQueueLocal.findIndex((graphicItem) => String(graphicItem.id) === key);
+    if (localIndex === -1) {
+        graphicQueueLocal.push({ id: key, graphic });
+    } else {
+        graphicQueueLocal[localIndex].graphic = graphic;
+    }
+}
+
+function addOrUpdateImageOverlay(item, task = item?.task || 'collect') {
+    const positions = resolveOverlayPositions(item);
+    const key = getOverlayKey(item);
+    const imageUrl = getFullImageUrl(item?.imageUrl || item?.url || item?.path);
+    const overlayLayer = getOverlayLayer(task);
+    if (!overlayLayer || !positions.length || !key || !imageUrl) {
+        return null;
+    }
+
+    const registryItem = overlayRegistry[key];
+    if (registryItem?.graphic) {
+        if (registryItem.layer && registryItem.layer !== overlayLayer) {
+            registryItem.layer.removeGraphic(registryItem.graphic);
+            overlayLayer.addGraphic(registryItem.graphic);
+            registryItem.layer = overlayLayer;
+        }
+        registryItem.graphic.positions = positions;
+        registryItem.graphic.style = {
+            ...registryItem.graphic.style,
+            image: imageUrl,
+            zIndex: getOverlayZIndex(task)
+        };
+        registryItem.graphic.show = item.graphic !== false;
+        registryItem.task = task;
+        registryItem.item = item;
+        updateOverlayListEntry(item, registryItem.graphic);
+        return registryItem.graphic;
+    }
+
+    const graphic = new mars3d.graphic.PolygonPrimitive({
+        positions,
+        id: key,
+        style: {
+            image: imageUrl,
+            clampToGround: true,
+            zIndex: getOverlayZIndex(task)
+        }
+    });
+    overlayLayer.addGraphic(graphic);
+    overlayRegistry[key] = { graphic, task, item, layer: overlayLayer };
+    patchList.push({ id: key, graphic, task });
+    updateOverlayListEntry(item, graphic);
+    return graphic;
+}
 
 function convertToSurroundingPointsNew(item, height = 0) {
     console.log("item is:", item)
@@ -432,7 +716,11 @@ function convertToSurroundingPointsNew(item, height = 0) {
 
 // 获取当前图形
 function createGraphic(item) {
-    console.log("graphicLayer: ", item.type, item.poly[0]);
+    if (isOverlayItem(item)) {
+        const graphic = addOrUpdateImageOverlay(item, item.task || 'collect')
+        return graphic
+    }
+    console.log("graphicLayer: ", item.type, item?.poly?.[0]);
     if (item.type === 'rgb') {
 
         const graphic = new mars3d.graphic.PolygonPrimitive({
@@ -469,23 +757,28 @@ function createGraphic(item) {
 // 针对微光红外图片和高光谱图片创建点对象
 // TODO 等到有了微光红外图片和高光谱图片的具体数据格式后再完善
 function createRealPoint(item, lng = null, lat = null) {
+    const assetUrl = getFullImageUrl(item.imageUrl || item.url || item.path)
     let htmlContent = `<table style="width:280px;">
     <tr><th scope="col" colspan="4" style="text-align:center;font-size:15px;">灾害现场</th></tr>
-    <tr><td colspan="4" style="text-align:center;"><img src="${"http://" + item.url}" alt="Image" style="max-width:100%;"></td></tr>
+    <tr><td colspan="4" style="text-align:center;"><img src="${assetUrl}" alt="Image" style="max-width:100%;"></td></tr>
     </table>`;
-    const baseUrl = item.url.split('/static/')[0];
-    let newlng = item.poly[0].lng
-    let newlat = item.poly[0].lat
+    const baseUrl = assetUrl.includes('/static/') ? assetUrl.split('/static/')[0] : ''
+    const sourcePoint = normalizeCornerPoint(item?.uavPosition || item?.sourcePosition || {})
+    let newlng = sourcePoint?.lng
+    let newlat = sourcePoint?.lat
     if (lng && lat) {
         newlng = lng
         newlat = lat
     }
+    if (newlng == null || newlat == null) {
+        return null
+    }
     const graphic = new mars3d.graphic.BillboardEntity({
         position: new mars3d.LngLatPoint(newlng, newlat, 0),
-        id: item.id,
+        id: getOverlayKey(item),
         style: {
 
-            image: 'http://' + baseUrl + '/static/poly.png',
+            image: `${baseUrl}/static/poly.png`,
             horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             label: {
@@ -499,35 +792,49 @@ function createRealPoint(item, lng = null, lat = null) {
     patchList.push(
         {
             id: graphic.id,
-            graphic: graphic
+            graphic: graphic,
+            task: item.task || 'collect'
         }
     )
     // 绑定Popup
+    updateOverlayListEntry(item, graphic)
     graphic.bindTooltip(htmlContent, { offsetY: -30, pointerEvents: true }).openTooltip()
+    return graphic
 }
 
 function delGraphic(item) {
-    const index = patchList.findIndex((i) => {
-        console.log("i: ", i.id, "item: ", item.id);
-        return i.id === item.id;
-    });
-
-    console.log("index: ", index, "item: ", item.id);
+    const key = getOverlayKey(item)
+    const index = patchList.findIndex((i) => i.id === key);
+    const registryItem = overlayRegistry[key]
     if (index !== -1) {
         // console.log("正在删除", item.type)
         // this.drawer.rgb = false; // 关闭rgb_drawer
         // patchList[index].graphic.show = false; // 隐藏图形对象
         // setTimeout(() => {
-        const graphic = graphicLayer.getGraphicById(item.id)
-        graphicLayer.removeGraphic(graphic); // 从图形层中删除图形对象
+        const targetGraphic = registryItem?.graphic || patchList[index].graphic
+        const targetLayer = registryItem?.layer || collectOverlayLayer || processOverlayLayer || graphicLayer
+        if (targetGraphic && targetLayer) {
+            targetLayer.removeGraphic(targetGraphic)
+        }
         patchList.splice(index, 1); // 从公共列表中删除
         // }, 100);
+    }
+    if (overlayRegistry[key]) {
+        delete overlayRegistry[key]
+    }
+    const queueIndex = graphicQueue.findIndex((queueItem) => String(queueItem.id) === key)
+    if (queueIndex !== -1) {
+        graphicQueue.splice(queueIndex, 1)
+    }
+    const localIndex = graphicQueueLocal.findIndex((graphicItem) => String(graphicItem.id) === key)
+    if (localIndex !== -1) {
+        graphicQueueLocal.splice(localIndex, 1)
     }
 }
 
 function clearGraphic(itemList) {
     itemList.forEach(item => {
-        const graphicIndex = patchList.findIndex(g => g.id === item.id);
+        const graphicIndex = patchList.findIndex(g => g.id === getOverlayKey(item));
         if (graphicIndex !== -1) {
             delGraphic(item)
         }
@@ -539,6 +846,27 @@ function focusGraphicFromHistory(item) {
         console.warn('Map is not ready, skip focusing history item.', item?.id);
         return;
     }
+
+    const overlayBounds = getOverlayBounds(item)
+    if (overlayBounds) {
+        const centerLng = (overlayBounds.xmin + overlayBounds.xmax) / 2;
+        const centerLat = (overlayBounds.ymin + overlayBounds.ymax) / 2;
+        const focusHeight = Number(item?.focusHeight);
+        const cameraHeight = Number.isFinite(focusHeight) && focusHeight > 0 ? focusHeight : 3000;
+        map.scene.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(centerLng, centerLat, cameraHeight),
+            orientation: {
+                heading: Cesium.Math.toRadians(0),
+                pitch: Cesium.Math.toRadians(-90),
+                roll: 0
+            },
+            duration: 0.8
+        });
+        return;
+    }
+
+    console.warn('Invalid poly data, skip focusing history item.', item?.id, item?.poly);
+    return;
 
     const poly = item?.poly;
     if (!Array.isArray(poly) || poly.length < 2) {
@@ -575,6 +903,26 @@ function focusGraphicFromHistory(item) {
 }
 
 function reviseGraphic(newItem) {
+    const overlayKey = getOverlayKey(newItem)
+    const overlayBounds = getOverlayBounds(newItem)
+    const hadOverlayGraphic = Boolean(overlayRegistry[overlayKey]?.graphic)
+    if (isOverlayItem(newItem)) {
+        if (!hadOverlayGraphic && isRecentOverlaySource(newItem?.source) && newItem.graphic !== false) {
+            enqueueOverlayPlayback(newItem, newItem.task || 'collect')
+            return
+        }
+        const overlayGraphic = addOrUpdateImageOverlay(newItem, newItem.task || overlayRegistry[overlayKey]?.task || 'collect')
+        if (overlayGraphic) {
+            overlayGraphic.show = newItem.graphic !== false
+            // 关键修改：recent 新图成功贴到底图后，镜头自动飞到该图上空，便于实时查看。
+            if (!hadOverlayGraphic && overlayBounds && overlayGraphic.show && map) {
+                map.flyToExtent(overlayBounds, { duration: 0.5 });
+                processStore.setFlyToFlag(false)
+            }
+            return
+        }
+        return
+    }
     const existingIndex = patchList.findIndex(
 
         (item) => item.id === newItem.id
@@ -582,27 +930,16 @@ function reviseGraphic(newItem) {
     );
     // console.log("existingIndex is ", existingIndex, "newItem: ", newItem.id);
     if (existingIndex !== -1) {
-        extent = {
-            xmin: newItem.poly[0].lng,
-            xmax: newItem.poly[1].lng,
-            ymin: newItem.poly[0].lat,
-            ymax: newItem.poly[1].lat,
-            height: 3000
+        if (overlayBounds) {
+            extent = overlayBounds
+            map.flyToExtent(extent, { duration: 0.1 });
         }
-        map.flyToExtent(extent, { duration: 0.1 });
         console.log("existingIndex is not -1")
         patchList[existingIndex].graphic.show = newItem.graphic;
     } else {
-        if (processStore.getFlyToFlag()) {
-            extent = {
-                xmin: newItem.poly[0].lng,
-                xmax: newItem.poly[1].lng,
-                ymin: newItem.poly[0].lat,
-                ymax: newItem.poly[1].lat,
-                height: 3000
-            }
+        if (processStore.getFlyToFlag() && overlayBounds) {
+            extent = overlayBounds
             map.flyToExtent(extent, { duration: 0.5 });
-
         }
         processStore.setFlyToFlag(false)
         createGraphic(newItem)
@@ -619,6 +956,261 @@ function bindMourseClick() {
     map.off(mars3d.EventType.click, map_onclick)
     map.once(mars3d.EventType.click, map_onclick)
     return false
+}
+
+/*
+function getAreaMissionName(areaName) {
+    if (areaName === '洞庭湖' || areaName === '娲炲涵婀?) {
+        return 'dongtinghu'
+    }
+    if (areaName === '资兴州司门' || areaName === '璧勫叴宸炲徃闂?) {
+        return 'zixing'
+    }
+    return 'gansu'
+}
+*/
+
+function getAreaMissionName(areaName) {
+    const areaText = String(areaName || '').toLowerCase()
+    if (areaText.includes('洞庭') || areaText.includes('dongting')) {
+        return 'dongtinghu'
+    }
+    if (areaText.includes('资兴') || areaText.includes('zixing')) {
+        return 'zixing'
+    }
+    return 'gansu'
+}
+
+function clearOverlayRegistry() {
+    Object.keys(overlayRegistry).forEach((key) => {
+        delete overlayRegistry[key]
+    })
+    patchList.splice(0, patchList.length, ...patchList.filter((item) => !item?.task))
+    collectOverlayLayer?.clear?.()
+    processOverlayLayer?.clear?.()
+    clearOverlayPlaybackQueue()
+}
+
+function resetRealtimeUavSession() {
+    realtimeUavLastTimestamp = ''
+    uavRoutePositions.splice(0, uavRoutePositions.length)
+    realtimeUavHasFocusedStart = false
+    realtimeUavScanPulse = 0
+}
+
+function stopRealtimeUavMission() {
+    if (realtimeUavScanAnimationTimer) {
+        clearInterval(realtimeUavScanAnimationTimer)
+        realtimeUavScanAnimationTimer = null
+    }
+    if (realtimeUavTrackLine && graphicLayer) {
+        graphicLayer.removeGraphic(realtimeUavTrackLine)
+    }
+    if (realtimeUavGraphic && graphicLayer) {
+        graphicLayer.removeGraphic(realtimeUavGraphic)
+    }
+    if (realtimeUavScanGraphic && graphicLayer) {
+        graphicLayer.removeGraphic(realtimeUavScanGraphic)
+    }
+    realtimeUavTrackLine = null
+    realtimeUavGraphic = null
+    realtimeUavScanGraphic = null
+    realtimeUavLastTimestamp = ''
+    uavRoutePositions.splice(0, uavRoutePositions.length)
+    realtimeUavHasFocusedStart = false
+    realtimeUavScanPulse = 0
+}
+
+function ensureUavTrackLine() {
+    if (realtimeUavTrackLine || !graphicLayer) {
+        return
+    }
+    realtimeUavTrackLine = new mars3d.graphic.PolylineEntity({
+        positions: [],
+        style: {
+            width: 3,
+            materialType: mars3d.MaterialType.LineFlowColor,
+            materialOptions: {
+                color: "#00ffff",
+                speed: 10,
+                percent: 0.15,
+                alpha: 0.25
+            }
+        }
+    })
+    graphicLayer.addGraphic(realtimeUavTrackLine)
+}
+
+function updateUavTrackLine() {
+    ensureUavTrackLine()
+    if (realtimeUavTrackLine) {
+        realtimeUavTrackLine.positions = [...uavRoutePositions]
+    }
+}
+
+function startRealtimeUavDisplay() {
+    resetRealtimeUavSession()
+}
+
+// 关键修改：无人机开始展示时，第一帧坐标到达后立即飞到起始点上方。
+function focusRealtimeUavStartPosition(position, heading = 0, altitude = 1000) {
+    if (!map?.scene?.camera || !position) {
+        return
+    }
+
+    const lng = Number(position.lng)
+    const lat = Number(position.lat)
+    const alt = Number(position.alt ?? altitude ?? 1000)
+    if ([lng, lat].some((value) => Number.isNaN(value))) {
+        return
+    }
+
+    const cameraHeight = Math.max(alt + 1200, 1500)
+    map.scene.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(lng, lat, cameraHeight),
+        orientation: {
+            heading: Cesium.Math.toRadians(Number(heading) || 0),
+            pitch: Cesium.Math.toRadians(-70),
+            roll: 0
+        },
+        duration: 0.8
+    })
+}
+
+function ensureRealtimeUavScanAnimation() {
+    if (realtimeUavScanAnimationTimer) {
+        return
+    }
+
+    realtimeUavScanAnimationTimer = setInterval(() => {
+        if (!realtimeUavScanGraphic) {
+            return
+        }
+
+        realtimeUavScanPulse = (realtimeUavScanPulse + 1) % 120
+        const wave = Math.sin((realtimeUavScanPulse / 120) * Math.PI * 2)
+        const dynamicAngle = 7 + wave * 1.6
+        const dynamicOpacity = 0.55 + (wave + 1) * 0.18
+
+        realtimeUavScanGraphic.style = {
+            ...realtimeUavScanGraphic.style,
+            angle: dynamicAngle,
+            angle2: dynamicAngle,
+            opacity: dynamicOpacity
+        }
+    }, 80)
+}
+
+function updateRealtimeUavScanFrustum(position, heading = 0, altitude = 1000) {
+    if (!graphicLayer || !position) {
+        return
+    }
+
+    const groundScanPitch = -180
+    const frustumStyle = {
+        angle: 8,
+        angle2: 8,
+        heading,
+        pitch: groundScanPitch,
+        length: Math.max(Number(altitude) || 1000, 10),
+        materialType: mars3d.MaterialType.CylinderWave,
+        opacity: 1,
+        outline: false,
+        color: "#00ffff",
+        highlight: {
+            color: "#00ffff",
+            opacity: 0.9
+        }
+    }
+
+    if (!realtimeUavScanGraphic) {
+        realtimeUavScanGraphic = new mars3d.graphic.FrustumPrimitive({
+            position,
+            style: frustumStyle,
+            asynchronous: false,
+            flat: true
+        })
+        graphicLayer.addGraphic(realtimeUavScanGraphic)
+        ensureRealtimeUavScanAnimation()
+        return
+    }
+
+    realtimeUavScanGraphic.position = position
+    realtimeUavScanGraphic.style = {
+        ...realtimeUavScanGraphic.style,
+        ...frustumStyle
+    }
+}
+
+function updateRealtimeUavDisplay(payload = {}) {
+    const state = payload?.data || payload
+    const lng = Number(state?.lon ?? state?.lng)
+    const lat = Number(state?.lat)
+    if (Number.isNaN(lng) || Number.isNaN(lat) || !graphicLayer) {
+        return
+    }
+
+    const timestamp = state?.timestamp ?? ''
+    if (timestamp && timestamp === realtimeUavLastTimestamp) {
+        return
+    }
+
+    const alt = Number(state?.alt ?? 1000)
+    const heading = Number(state?.yaw ?? 0)
+    const position = new mars3d.LngLatPoint(lng, lat, alt)
+    const isFirstRealtimeUavPoint = uavRoutePositions.length === 0
+
+    if (!realtimeUavGraphic) {
+        realtimeUavGraphic = new mars3d.graphic.ModelEntity({
+            position,
+            style: {
+                url: realtimeUavModelUrl,
+                scale: 1,
+                minimumPixelSize: 300,
+                heading
+            }
+        })
+        graphicLayer.addGraphic(realtimeUavGraphic)
+    } else {
+        realtimeUavGraphic.position = position
+        realtimeUavGraphic.style = {
+            ...realtimeUavGraphic.style,
+            heading
+        }
+    }
+
+    const lastPosition = uavRoutePositions[uavRoutePositions.length - 1]
+    const shouldAppendPosition = !lastPosition
+        || Math.abs(lastPosition[0] - lng) > 0.000001
+        || Math.abs(lastPosition[1] - lat) > 0.000001
+        || Math.abs((lastPosition[2] || 0) - alt) > 0.1
+
+    if (shouldAppendPosition) {
+        uavRoutePositions.push([lng, lat, alt])
+        updateUavTrackLine()
+    }
+
+    if (isFirstRealtimeUavPoint && !realtimeUavHasFocusedStart) {
+        focusRealtimeUavStartPosition(position, heading, alt)
+        realtimeUavHasFocusedStart = true
+    }
+
+    realtimeUavLastTimestamp = timestamp || realtimeUavLastTimestamp
+    updateRealtimeUavScanFrustum(position, heading, alt)
+}
+
+function handleRealtimeUavUpdate(payload) {
+    updateRealtimeUavDisplay(payload)
+}
+
+function handleRealtimeUavVisibilityChange(visible) {
+    if (visible) {
+        startRealtimeUavDisplay()
+        return
+    }
+    if (!visible) {
+        stopRealtimeUavMission()
+    }
 }
 let isClickPoint = false
 function map_onclick(event) {
@@ -842,6 +1434,8 @@ watch(isProcess, (newVal, oldVal) => {
         graphicQueueLocal.splice(0, graphicQueueLocal.length)
         graphicInterval && clearInterval(graphicInterval)
         graphicInterval = null
+        stopRealtimeUavMission()
+        clearOverlayRegistry()
     }
 })
 
@@ -1184,6 +1778,7 @@ function loadPic(fixedRoute, pathObj, endPoint, graphicFrustum, flydis, frameNum
                                             id: graphic.id,
                                             name: item.fileName,
                                             type: item.fileDate,
+                                            source: 'realtime-transfer',
                                             graphic: graphic.show
                                         })
 
@@ -1313,6 +1908,9 @@ let processImageList = reactive([])
 watch(graphicQueue, (newVal, oldVal) => {
     newVal.forEach(item => {
         const graphicItem = graphicQueueLocal.find(g => g.id === item.id)
+        if (!graphicItem?.graphic) {
+            return
+        }
         if (item.graphic != graphicItem.graphic.show) {
             graphicItem.graphic.show = item.graphic
         }

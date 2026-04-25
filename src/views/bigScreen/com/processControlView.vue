@@ -38,10 +38,11 @@
                     :history-deleting="currentHistoryDeleting"
                     :is-collecting="isCollecting[currentModalType]" :is-interpretate="isInterpretate[currentModalType]" :running="currentWorkbenchRunning"
                     :workbench-status="currentWorkbenchStatus" :camera-speed="cameraSpeed[currentModalType]"
-                    :rgb-capture-config="currentRgbCaptureConfig"
+                    :rgb-capture-config="currentRgbCaptureConfig" :is-uav-visible="isRealtimeUavVisible[currentModalType]"
                     :table-height="workbenchTableHeight" :row-class-name="getRowClassName"
                     @close="closeWorkbench" @capture-toggle-request="openControlConfirmDialog"
                     @process-toggle-request="openProcessConfirmDialog"
+                    @uav-visibility-toggle-request="handleRealtimeUavVisibility"
                     @modal-change="handleModalChange"
                     @transfer="dataTransfer" @recent-page-change="handleRecentPageChange"
                     @history-page-change="handleHistoryPageChange"
@@ -51,7 +52,7 @@
                     @update:rgb-capture-config="(patch, options) => updateRgbCaptureConfig(currentModalType, patch, options)" />
             </div>
 
-            <el-table v-else class="dataTable" :data="graphicQueue" height="350" size='small'
+            <el-table v-else class="dataTable" :data="demoGraphicQueue" height="350" size='small'
                 style="--el-table-border-color: none;border-right: 1px #143275 solid;border-left: 1px #143275 solid;border-bottom: 1px #143275 solid;"
                 :highlight-current-row="false" header-cell-class-name="headerClass"
                 :header-cell-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', borderLeft: '0.5px #154480 solid', borderBottom: '1px #154480 solid' }"
@@ -167,8 +168,8 @@
 
 
 <script setup>
-import { computed, ref, onMounted, reactive, toRefs } from 'vue'
-import { getProcess2Result, process2List, startControl } from '../../../api/zhongyan/api';
+import { computed, ref, onMounted, onBeforeUnmount, reactive, toRefs, watch } from 'vue'
+import { getProcess2Result, process2List, startControl, getRealtimeUavInfo } from '../../../api/zhongyan/api';
 import {
     getRecentData,
     cameraControl,
@@ -255,6 +256,8 @@ let isCollecting = reactive({});// 是否正在采集
 let isInterpretate = reactive({});// 是否正在解译
 let captureIntervalIds = reactive({}); // 用于存储每个模态的定时器 ID
 let processIntervalIds = reactive({}); // 用于存储每个模态的处理定时器 ID
+let isRealtimeUavVisible = reactive({});
+let realtimeUavPollingIds = reactive({});
 let rgbCaptureConfig = reactive({});
 const paginationState = reactive({});
 const workbenchVisible = ref(false);
@@ -281,6 +284,7 @@ modalities.forEach(modality => {
     cameraSpeed[modality] = modalConfigs[modality]?.speedMin ?? 0;
     isCollecting[modality] = false;
     isInterpretate[modality] = false;
+    isRealtimeUavVisible[modality] = false;
     if (modality === RGB_MODAL) {
         rgbCaptureConfig[modality] = createDefaultRgbCaptureConfig();
     }
@@ -306,6 +310,7 @@ function toggleWorkbenchVisible() {
 }
 
 function closeWorkbench() {
+    stopRealtimeUavVisibility(RGB_MODAL);
     setWorkbenchVisible(false);
 }
 
@@ -347,6 +352,31 @@ function isRequestSuccess(res) {
         return ['success', 'ok', 'true'].includes(status.toLowerCase());
     }
     return true;
+}
+
+function isToggleRequestSuccess(res, targetState) {
+    const code = res?.code ?? res?.data?.code;
+    if (typeof code === 'number' && code !== 200) {
+        return false;
+    }
+
+    const status = res?.status ?? res?.success;
+    if (typeof status === 'boolean') {
+        return status;
+    }
+    if (typeof status === 'string') {
+        return ['success', 'ok', 'true'].includes(status.toLowerCase());
+    }
+
+    const dataStatus = res?.data?.status;
+    if (typeof dataStatus === 'boolean') {
+        return dataStatus === targetState;
+    }
+    if (typeof dataStatus === 'string') {
+        return ['success', 'ok', 'true'].includes(dataStatus.toLowerCase());
+    }
+
+    return isRequestSuccess(res);
 }
 
 function getRecentSnapshotTime(modal, listType) {
@@ -487,10 +517,95 @@ function updateRgbCaptureConfig(modal, patch = {}, options = {}) {
     }
 }
 
+function normalizeRealtimeUavPayload(payload = {}) {
+    const uavData = payload?.data || {};
+    return {
+        id: payload?.id ?? null,
+        data: {
+            lon: Number(uavData?.lon),
+            lat: Number(uavData?.lat),
+            alt: Number(uavData?.alt ?? 0),
+            velo: Number(uavData?.velo ?? 0),
+            yaw: Number(uavData?.yaw ?? 0),
+            roll: Number(uavData?.roll ?? 0),
+            pitch: Number(uavData?.pitch ?? -90),
+            timestamp: uavData?.timestamp ?? '',
+        }
+    };
+}
+
+async function emitRealtimeUavFrame(modal = RGB_MODAL) {
+    const response = await getRealtimeUavInfo();
+    console.log('获取无人机实时信息:', response);
+    const normalizedPayload = normalizeRealtimeUavPayload(response?.data || response);
+    const data = normalizedPayload.data;
+    if (Number.isNaN(data.lon) || Number.isNaN(data.lat)) {
+        throw new Error('无人机实时信息缺少经纬度');
+    }
+    emit('realtime-uav-update', normalizedPayload);
+}
+
+function stopRealtimeUavVisibility(modal = RGB_MODAL) {
+    if (realtimeUavPollingIds[modal]) {
+        clearInterval(realtimeUavPollingIds[modal]);
+        delete realtimeUavPollingIds[modal];
+    }
+    if (isRealtimeUavVisible[modal]) {
+        isRealtimeUavVisible[modal] = false;
+    }
+    emit('realtime-uav-visibility-change', false);
+}
+
+function startRealtimeUavVisibility(modal = RGB_MODAL) {
+    if (modal !== RGB_MODAL) {
+        return;
+    }
+
+    stopRealtimeUavVisibility(modal);
+    isRealtimeUavVisible[modal] = true;
+    emit('realtime-uav-visibility-change', true);
+
+    emitRealtimeUavFrame(modal).catch((error) => {
+        stopRealtimeUavVisibility(modal);
+        ElMessage({
+            message: error.message || '无人机实时信息获取失败',
+            type: 'error'
+        });
+    });
+
+    realtimeUavPollingIds[modal] = setInterval(async () => {
+        try {
+            await emitRealtimeUavFrame(modal);
+        } catch (error) {
+            stopRealtimeUavVisibility(modal);
+            ElMessage({
+                message: error.message || '无人机实时信息获取失败',
+                type: 'error'
+            });
+        }
+    }, 8000);
+}
+
+function handleRealtimeUavVisibility(modal, nextState) {
+    if (modal !== RGB_MODAL) {
+        return;
+    }
+
+    if (nextState) {
+        startRealtimeUavVisibility(modal);
+        return;
+    }
+
+    stopRealtimeUavVisibility(modal);
+}
+
 // 关键修改：bench 内切换模态时，所有展示与控制都跟随当前模态联动。
 function handleModalChange(modal) {
     if (!modalConfigs[modal]) {
         return;
+    }
+    if (currentModalType.value === RGB_MODAL && modal !== RGB_MODAL) {
+        stopRealtimeUavVisibility(RGB_MODAL);
     }
     currentModalType.value = modal;
 }
@@ -801,7 +916,7 @@ function handleCaptureControl(modal, targetState = isCollecting[modal]) {
             : cameraControl(modal, isCol, camSpeed);
 
         startCaptureRequest.then(res => {
-            if (!isRequestSuccess(res)) {
+            if (!isToggleRequestSuccess(res, isCol)) {
                 ElMessage({
                     message: getResponseMessage(res, '相机开启失败'),
                     type: 'error'
@@ -838,7 +953,7 @@ function handleCaptureControl(modal, targetState = isCollecting[modal]) {
         : cameraControl(modal, isCol);
 
     stopCaptureRequest.then(res => {
-        if (modal === RGB_MODAL && !isRequestSuccess(res)) {
+        if (modal === RGB_MODAL && !isToggleRequestSuccess(res, isCol)) {
             ElMessage({
                 message: getResponseMessage(res, '相机关闭失败'),
                 type: 'error'
@@ -879,7 +994,7 @@ function getProcessData(modal, targetState = isInterpretate[modal]) {
         });
         clearSelection(modal, 'process');
         selectMethod(modal, isInter).then(res => {
-            if (!isRequestSuccess(res)) {
+            if (!isToggleRequestSuccess(res, isInter)) {
                 ElMessage({
                     message: getResponseMessage(res, '解译开启失败'),
                     type: 'error'
@@ -913,7 +1028,7 @@ function getProcessData(modal, targetState = isInterpretate[modal]) {
             type: 'info'
         });
         selectMethod(modal, isInter).then(res => {
-            if (!isRequestSuccess(res)) {
+            if (!isToggleRequestSuccess(res, isInter)) {
                 ElMessage({
                     message: getResponseMessage(res, '解译关闭失败'),
                     type: 'error'
@@ -1132,6 +1247,10 @@ onMounted(() => {
     });
 });
 
+onBeforeUnmount(() => {
+    stopRealtimeUavVisibility(RGB_MODAL);
+});
+
 /**
  * @description: 数据转移
  * @param {*} modal
@@ -1177,14 +1296,43 @@ let isdisabledBtn = reactive({
 })
 let btnMessage = ref('进行旋转')
 let props = defineProps(['bindMourseClick', 'processCtrlData', 'changeRotate', 'graphicQueue', 'updateProcess', 'updateTrans', 'updateEvaluate', 'showgraphic', 'toggleIsVisible', 'areaLabel', 'getProcessResult'])
-const emit = defineEmits(['update:graphicQueue', 'workbench-visible-change'])
+const emit = defineEmits(['update:graphicQueue', 'workbench-visible-change', 'realtime-uav-update', 'realtime-uav-visibility-change'])
 const { graphicQueue } = toRefs(props)
+const demoGraphicQueue = ref([])
+const demoGraphicQueueInitialized = ref(false)
 let uploadProgress = ref(0)
 let filePath = ref('D:/')
 let selectedFile = ref(null)
 let process2Model = ref(0)
 let fileList = ref([])
 let timeChange = ref(true)
+
+function cloneGraphicQueueItem(item = {}) {
+    return {
+        ...item,
+    }
+}
+
+// 关键修改：外层表格使用独立演示数据，避免与 workbench 的实时列表更新互相影响。
+function syncDemoGraphicQueue(sourceList = []) {
+    demoGraphicQueue.value = Array.isArray(sourceList)
+        ? sourceList.map((item) => cloneGraphicQueueItem(item))
+        : []
+}
+
+watch(graphicQueue, (newQueue) => {
+    if (demoGraphicQueueInitialized.value || !Array.isArray(newQueue) || !newQueue.length) {
+        return
+    }
+    syncDemoGraphicQueue(newQueue)
+    demoGraphicQueueInitialized.value = true
+}, { deep: true, immediate: true })
+
+watch(() => [props.processCtrlData, props.areaLabel], () => {
+    const currentQueue = Array.isArray(graphicQueue.value) ? graphicQueue.value : []
+    syncDemoGraphicQueue(currentQueue)
+    demoGraphicQueueInitialized.value = currentQueue.length > 0
+}, { deep: false })
 function beforeUpload(file, fileList) {
 
     selectedFile.value = file
