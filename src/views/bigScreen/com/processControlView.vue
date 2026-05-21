@@ -52,7 +52,7 @@
                     @update:rgb-capture-config="(patch, options) => updateRgbCaptureConfig(currentModalType, patch, options)" />
             </div>
 
-            <el-table v-else class="dataTable" :data="demoGraphicQueue" height="350" size='small'
+            <el-table v-else class="dataTable" :data="processGraphicQueue" height="350" size='small'
                 style="--el-table-border-color: none;border-right: 1px #143275 solid;border-left: 1px #143275 solid;border-bottom: 1px #143275 solid;"
                 :highlight-current-row="false" header-cell-class-name="headerClass"
                 :header-cell-style="{ color: '#fff', fontSize: '14px', textAlign: 'center', borderLeft: '0.5px #154480 solid', borderBottom: '1px #154480 solid' }"
@@ -1298,41 +1298,14 @@ let btnMessage = ref('进行旋转')
 let props = defineProps(['bindMourseClick', 'processCtrlData', 'changeRotate', 'graphicQueue', 'updateProcess', 'updateTrans', 'updateEvaluate', 'showgraphic', 'toggleIsVisible', 'areaLabel', 'getProcessResult'])
 const emit = defineEmits(['update:graphicQueue', 'workbench-visible-change', 'realtime-uav-update', 'realtime-uav-visibility-change'])
 const { graphicQueue } = toRefs(props)
-const demoGraphicQueue = ref([])
-const demoGraphicQueueInitialized = ref(false)
+// 关键修改：小面板直接绑定父级贴图队列，保证新增、清空和显隐都作用到真实地图图层。
+const processGraphicQueue = computed(() => Array.isArray(graphicQueue.value) ? graphicQueue.value : [])
 let uploadProgress = ref(0)
 let filePath = ref('D:/')
 let selectedFile = ref(null)
 let process2Model = ref(0)
 let fileList = ref([])
 let timeChange = ref(true)
-
-function cloneGraphicQueueItem(item = {}) {
-    return {
-        ...item,
-    }
-}
-
-// 关键修改：外层表格使用独立演示数据，避免与 workbench 的实时列表更新互相影响。
-function syncDemoGraphicQueue(sourceList = []) {
-    demoGraphicQueue.value = Array.isArray(sourceList)
-        ? sourceList.map((item) => cloneGraphicQueueItem(item))
-        : []
-}
-
-watch(graphicQueue, (newQueue) => {
-    if (demoGraphicQueueInitialized.value || !Array.isArray(newQueue) || !newQueue.length) {
-        return
-    }
-    syncDemoGraphicQueue(newQueue)
-    demoGraphicQueueInitialized.value = true
-}, { deep: true, immediate: true })
-
-watch(() => [props.processCtrlData, props.areaLabel], () => {
-    const currentQueue = Array.isArray(graphicQueue.value) ? graphicQueue.value : []
-    syncDemoGraphicQueue(currentQueue)
-    demoGraphicQueueInitialized.value = currentQueue.length > 0
-}, { deep: false })
 function beforeUpload(file, fileList) {
 
     selectedFile.value = file
@@ -1391,8 +1364,10 @@ function startControlApi(ctrlInst, isOpen) {
         fileName = 'dongtinghu';
     } else if (props.areaLabel === '资兴州司门') {
         fileName = 'zixing';
-    } else {
+    } else if (props.areaLabel === '甘肃地震'){
         fileName = 'gansu';
+    }else {
+        fileName = 'congjiang';
     }
     if (!timeChange.value) {
         return

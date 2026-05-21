@@ -247,6 +247,10 @@ let options_edge = [
         value: '3',
         label: '资兴州司门',
     },
+    {
+        value: '4',
+        label: '从江县',
+    },
 ]
 let options_line = [
     {
@@ -287,7 +291,15 @@ let informationServiceInfoShow = ref(false)
 let informationServiceInfoType = ref('')
 let graphicQueue = reactive([])
 let graphicQueueLocal = []
-const processPanelGraphicQueue = computed(() => graphicQueue.filter((item) => item?.source !== 'realtime-transfer'))
+// 关键修改：小面板列表只展示“处理开始”动画实际贴到底图上的图片，和展开的流程控制工作台数据剥离。
+const processPanelGraphicQueue = computed(() => graphicQueue.filter((item) => item?.source === 'realtime-transfer'))
+// 关键修改：控制处理列表第一组数据出现的延迟，单位毫秒；需要调快/调慢就改这里。
+const PROCESS_LIST_FIRST_SHOW_DELAY = 100000
+const PROCESS_LIST_GROUP_SHOW_INTERVAL = 600
+const PLANE_SPEED = 150 // 无人机飞行速度，单位米/秒；需要调快/调慢就改这里。
+let processPanelDisplayTimer = null
+let processPanelDisplayStarted = false
+let processPanelDisplayQueue = reactive([])
 let isProcess = ref(false)
 // let isTrans = ref(false)
 let isEvaluate = ref(false)
@@ -318,6 +330,7 @@ let realtimeUavHasFocusedStart = false
 let realtimeUavScanAnimationTimer = null
 let realtimeUavScanPulse = 0
 let realtimeUavModelUrl = "//data.mars3d.cn/gltf/mars/wrj.glb"
+const REALTIME_UAV_MODEL_HEADING_OFFSET = -90
 const overlayDisplayDuration = 3000
 let pendingOverlayQueue = reactive([])
 let pendingOverlayKeySet = new Set()
@@ -1142,6 +1155,11 @@ function updateRealtimeUavScanFrustum(position, heading = 0, altitude = 1000) {
     }
 }
 
+function getRealtimeUavModelHeading(heading = 0) {
+    // 关键修改：无人机模型自身朝向与业务航向相差 90 度，展示时补偿模型朝向。
+    return (Number(heading) || 0) + REALTIME_UAV_MODEL_HEADING_OFFSET
+}
+
 function updateRealtimeUavDisplay(payload = {}) {
     const state = payload?.data || payload
     const lng = Number(state?.lon ?? state?.lng)
@@ -1157,6 +1175,7 @@ function updateRealtimeUavDisplay(payload = {}) {
 
     const alt = Number(state?.alt ?? 1000)
     const heading = Number(state?.yaw ?? 0)
+    const modelHeading = getRealtimeUavModelHeading(heading)
     const position = new mars3d.LngLatPoint(lng, lat, alt)
     const isFirstRealtimeUavPoint = uavRoutePositions.length === 0
 
@@ -1167,7 +1186,7 @@ function updateRealtimeUavDisplay(payload = {}) {
                 url: realtimeUavModelUrl,
                 scale: 1,
                 minimumPixelSize: 300,
-                heading
+                heading: modelHeading
             }
         })
         graphicLayer.addGraphic(realtimeUavGraphic)
@@ -1175,7 +1194,7 @@ function updateRealtimeUavDisplay(payload = {}) {
         realtimeUavGraphic.position = position
         realtimeUavGraphic.style = {
             ...realtimeUavGraphic.style,
-            heading
+            heading: modelHeading
         }
     }
 
@@ -1269,8 +1288,10 @@ function toggleTo(num, type, label) {
         areaName = 'dongtinghu';
     } else if (label === '资兴州司门') {
         areaName = 'zixing';
-    } else {
+    } else if (label === '甘肃地震'){
         areaName = 'gansu';
+    } else{
+        areaName = 'congjiang';
     }
     getAreaAxis(areaName).then(res => {
         if (res.code === 200) {
@@ -1403,6 +1424,8 @@ watch(isProcess, (newVal, oldVal) => {
             areaName = '甘肃地震';
         } else if (areaLabel.value === '资兴州司门') {
             areaName = '资兴州司门';
+        } else if (areaLabel.value === '从江县'){
+            areaName = '从江县';
         }
 
         if (areaName) {
@@ -1432,6 +1455,8 @@ watch(isProcess, (newVal, oldVal) => {
         // console.log(graphicQueue.length)
         graphicQueue.splice(0, graphicQueue.length)
         graphicQueueLocal.splice(0, graphicQueueLocal.length)
+        processImageList.splice(0, processImageList.length)
+        clearProcessPanelDisplayQueue()
         graphicInterval && clearInterval(graphicInterval)
         graphicInterval = null
         stopRealtimeUavMission()
@@ -1543,6 +1568,14 @@ function addUAVPath(graphicLayer, positions, area) {
                     startRoam(extent.xmin, extent.xmax, extent.ymin, extent.ymax, divideX.value, divideY.value, 9, 9, 1000, 20, 12)
                     // startRoam(extent.xmin, extent.xmax, extent.ymin, extent.ymax, divideX.value, divideY.value, divideX.value, divideY.value, 1000)
                 }
+                else if (area === '从江县') {
+                    receivedList.push('congjiang')
+                    receivedList.push('congjiang_uav')
+                    areaName = 'congjiang'
+                    newSection.value.areaChange(areaName)
+                    startRoam(extent.xmin, extent.xmax, extent.ymin, extent.ymax, divideX.value, divideY.value, divideX.value, divideY.value, 1000)
+                    // startRoam(extent.xmin, extent.xmax, extent.ymin, extent.ymax, divideX.value, divideY.value, divideX.value, divideY.value, 1000)
+                }
                 graphicLayer.removeGraphic(graphic)
             }
         })
@@ -1632,7 +1665,8 @@ function startRoam(lngmin, lngmax, latmin, latmax, x_num, y_num, x_all, y_all, h
             const ip = res.data.ip
             fixedRoute = new mars3d.graphic.FixedRoute({
                 name: "无人机航拍",
-                speed: timeModeFlag.value ? 3000 : 2000,
+                // speed: timeModeFlag.value ? 3000 : 2000,
+                speed: PLANE_SPEED,
                 positions: pathObj.path,
                 model: {
                     url: "http://" + ip + ":8088/v2/static/uav.gltf",
@@ -1666,6 +1700,73 @@ function startRoam(lngmin, lngmax, latmin, latmax, x_num, y_num, x_all, y_all, h
     })
 
     // frameNum = -1
+}
+
+function getProcessPanelRowKey(row = {}) {
+    return String(row.name || row.fileName || row.id || '')
+}
+
+function hasProcessPanelRow(row = {}) {
+    const rowKey = getProcessPanelRowKey(row)
+    if (!rowKey) {
+        return true
+    }
+    const hasShown = graphicQueue.some((item) => item?.source === 'realtime-transfer' && getProcessPanelRowKey(item) === rowKey)
+    const hasQueued = processPanelDisplayQueue.some((group) => group.items.some((item) => getProcessPanelRowKey(item.row) === rowKey))
+    return hasShown || hasQueued
+}
+
+function scheduleProcessPanelDisplay() {
+    if (processPanelDisplayTimer || !processPanelDisplayQueue.length) {
+        return
+    }
+
+    const delay = processPanelDisplayStarted ? PROCESS_LIST_GROUP_SHOW_INTERVAL : PROCESS_LIST_FIRST_SHOW_DELAY
+    processPanelDisplayTimer = setTimeout(() => {
+        processPanelDisplayTimer = null
+        const nextGroup = processPanelDisplayQueue.shift()
+        if (nextGroup?.items?.length) {
+            nextGroup.items.forEach((item) => {
+                graphicLayer.addGraphic(item.graphic)
+                graphicQueueLocal.push({
+                    id: item.row.id,
+                    graphic: item.graphic
+                })
+            })
+            graphicQueue.push(...nextGroup.items.map((item) => item.row))
+            processPanelDisplayStarted = true
+        }
+        scheduleProcessPanelDisplay()
+    }, delay)
+}
+
+function enqueueProcessPanelItem(row = {}, graphic, order = 0) {
+    if (hasProcessPanelRow(row)) {
+        return
+    }
+
+    const safeOrder = Number.isFinite(order) ? order : 0
+    let targetGroup = processPanelDisplayQueue.find((group) => group.order === safeOrder)
+    if (!targetGroup) {
+        targetGroup = {
+            order: safeOrder,
+            items: []
+        }
+        processPanelDisplayQueue.push(targetGroup)
+        processPanelDisplayQueue.sort((a, b) => a.order - b.order)
+    }
+
+    targetGroup.items.push({ row, graphic })
+    scheduleProcessPanelDisplay()
+}
+
+function clearProcessPanelDisplayQueue() {
+    if (processPanelDisplayTimer) {
+        clearTimeout(processPanelDisplayTimer)
+        processPanelDisplayTimer = null
+    }
+    processPanelDisplayStarted = false
+    processPanelDisplayQueue.splice(0, processPanelDisplayQueue.length)
 }
 
 function loadPic(fixedRoute, pathObj, endPoint, graphicFrustum, flydis, frameNum, endBlock) {
@@ -1741,7 +1842,12 @@ function loadPic(fixedRoute, pathObj, endPoint, graphicFrustum, flydis, frameNum
                         // console.log(res.data.fileList)
                         let resList = res.data.fileList
                         resList.forEach(item => {
-                            processImageList.push(item)
+                            const itemName = item?.fileName
+                            const hasCached = processImageList.some((cachedItem) => cachedItem.fileName === itemName)
+                            const hasShownOrQueued = hasProcessPanelRow({ name: itemName })
+                            if (itemName && !hasCached && !hasShownOrQueued) {
+                                processImageList.push(item)
+                            }
                             // console.log("I got this")
                         })
 
@@ -1772,20 +1878,14 @@ function loadPic(fixedRoute, pathObj, endPoint, graphicFrustum, flydis, frameNum
                                     })
                                     console.log("fileName: ", item.fileName, convertToSurroundingPoints(item))
                                     pathObj.blockOrder[position].flag = true
-                                    graphicLayer.addGraphic(graphic)
-                                    graphicQueue.push(
-                                        {
-                                            id: graphic.id,
-                                            name: item.fileName,
-                                            type: item.fileDate,
-                                            source: 'realtime-transfer',
-                                            graphic: graphic.show
-                                        })
-
-                                    graphicQueueLocal.push({
+                                    enqueueProcessPanelItem({
                                         id: graphic.id,
-                                        graphic: graphic
-                                    })
+                                        name: item.fileName,
+                                        type: item.fileDate,
+                                        source: 'realtime-transfer',
+                                        graphic: graphic.show
+                                    }, graphic, position)
+
                                     // 将graphic添加到processStore中
                                     // if (itemName.includes('A')) {
                                     //     // 处理的数据
@@ -1813,7 +1913,10 @@ function loadPic(fixedRoute, pathObj, endPoint, graphicFrustum, flydis, frameNum
                                     //     id: graphic.id,
                                     //     graphic: graphic
                                     // })
-                                    processImageList = processImageList.filter(item => item.fileName !== itemName);
+                                    const cachedIndex = processImageList.findIndex((cachedItem) => cachedItem.fileName === itemName)
+                                    if (cachedIndex !== -1) {
+                                        processImageList.splice(cachedIndex, 1)
+                                    }
                                 }
 
                             }
