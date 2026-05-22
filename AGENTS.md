@@ -6,7 +6,8 @@
 - Package name: `spacelab`
 - Stack: `Vue 3`, `Vite 4`, `Vue Router 4`, `Pinia`, `Element Plus`
 - Package manager: `pnpm`
-- Main app shape: admin frontend with dashboard, map, and big-screen modules
+- Main app shape: Mars3D-centered UAV remote sensing task platform
+- Current refactor guide: `docs/frontend-refactor-plan.md`
 
 ## Common Commands
 
@@ -40,6 +41,19 @@
 - When adding pages, keep them aligned with the current `src/views` structure and wire routes deliberately.
 - Treat `src/permission.js`, `src/settings.js`, `src/router`, and `src/layout` as global-impact areas.
 - For map, big-screen, and 3D features, extend the current modules before introducing new parallel structures.
+- After every completed modification, create a git commit and push it to the matching remote branch by default; if the user specifies a target branch, push to that target branch instead.
+
+## Frontend Refactor Direction
+
+- Use `docs/frontend-refactor-plan.md` as the source of truth for frontend refactor scope and sequencing.
+- The refactor should delete almost all legacy admin, dashboard, form, system-management, and historical workflow code.
+- Keep the application centered on Mars3D/Cesium map display, UAV visualization, route/frustum display, layer display, and asset overlay capabilities.
+- Existing flow-control panel code, including `processControlView.vue` and page-local capture/process/transfer/demo workflow implementations, can be removed during the refactor.
+- Rebuild task control through the `/v2` Mission, Task, TaskCommand, Asset, Telemetry, Realtime, and Approval APIs instead of preserving old page-local control logic.
+- Prioritize interface layout and touch/mouse interaction design before filling in detailed JavaScript behavior.
+- Keep the refactor structured but readable: avoid splitting simple features across too many files.
+- Prefer Pinia for shared business state, SSE for realtime updates, and Web Worker for heavy coordinate, track, or geometry processing.
+- Add comments on key interface wrappers and core logic, especially code that triggers high-risk commands, manages realtime subscriptions, or mutates Mars3D layers.
 
 ## Coding Notes
 
