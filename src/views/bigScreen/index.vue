@@ -13,11 +13,10 @@
         <div class="bg"></div>
         <div class="big-screen-stage" :style="stageStyle">
             <div class="big-screen-shell">
-        <!-- <div class="page-btn screen-detail" @click="goToBigScreen()">综合评估</div> -->
         <div v-if="!workbenchExpanded" class="page-btn screen-workbench-toggle" @click="openWorkbenchPanel()">
             显示流程控制
         </div>
-        <div class="page-btn screen-detail" @click="changetime()">{{ timeMode }}</div>
+        <div class="page-btn screen-detail" @click="openComprehensiveEvaluation()">综合评估</div>
         <div class="bg"></div>
         <pageTitle></pageTitle>
 
@@ -227,6 +226,7 @@ import { getAreaAxis, getPointData, processResult, getServerIp } from "../../api
 import { Shp2JsonLayer } from "./js/Shp2JsonLayer.js"
 import { useProcessStore } from "@/store/modules/process";
 const configUrl = "config/config.json";
+const externalLinksConfigUrl = "config/external-links.json";
 let value_edge = ref('案例选择')
 // let value_line = ref('线下处理')
 const newSection = ref(null)
@@ -314,7 +314,6 @@ let divideY = ref()
 let car = reactive([112.7957644, 29.3971501])
 let pointIdList = reactive([])
 let generView = ref(false)
-let timeMode = ref('夜间模式')
 let timeModeFlag = ref(true)
 const OVERLAY_Z_INDEX = {
     collect: 200,
@@ -370,25 +369,23 @@ function informationServiceInfoClick(data) {
 
 }
 
-function goToBigScreen() {
-    window.location.href = "https://jcyj.ndrcc.org.cn:4016/diit-flood-web/app/module/home/home.html?login=1&token=95fb5b75-dcaa-415a-a49e-9ec5089e1901"
-}
-
-function changetime() {
-    if (timeMode.value === '夜间模式') {
-        timeMode.value = '白天模式'
+async function openComprehensiveEvaluation() {
+    try {
+        // 关键跳转地址从 public/config/external-links.json 运行时读取，便于后台发布后直接调整。
+        const response = await fetch(`${externalLinksConfigUrl}?t=${Date.now()}`, { cache: 'no-store' })
+        const config = await response.json()
+        const targetUrl = config?.comprehensiveEvaluationUrl
+        if (!response.ok || !targetUrl) {
+            throw new Error('Missing comprehensiveEvaluationUrl')
+        }
+        window.location.href = targetUrl
+    } catch (error) {
+        console.warn('Failed to load comprehensive evaluation link.', error)
         ElMessage({
-            message: '夜间模式',
-            type: 'success'
-        })
-    } else {
-        timeMode.value = '夜间模式'
-        ElMessage({
-            message: '白天模式',
-            type: 'success'
+            message: '综合评估链接配置读取失败',
+            type: 'error'
         })
     }
-    timeModeFlag.value = !timeModeFlag.value
 }
 
 function changeRotate() {
